@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
+import * as Tone from "tone";
 
 const AGENTS = [
   { id: "alpha", name: "Alpha", role: "Trader", color: 0x14f195, status: "working", tasks: 47, balance: 12.4 },
@@ -57,9 +58,13 @@ export default function ClawHQ() {
   const labelContainerRef = useRef(null);
   const labelElemsRef = useRef({});
   const followAgentRef = useRef(null);
+  const seatPositionsRef = useRef({});
 
   const [activePanel, setActivePanel] = useState("tasks");
   const [panelOpen, setPanelOpen] = useState(true);
+  const [musicPlaying, setMusicPlaying] = useState(false);
+  const musicRef = useRef(null);
+  const musicAutoStarted = useRef(false);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [agents, setAgents] = useState(AGENTS.map(a => ({ ...a })));
   const [tasks, setTasks] = useState([]);
@@ -81,11 +86,102 @@ export default function ClawHQ() {
   const [chatAgent, setChatAgent] = useState("alpha");
   const [hqPanelOpen, setHqPanelOpen] = useState(false);
   const [hqTab, setHqTab] = useState("playbooks");
+  const [monitorModal, setMonitorModal] = useState(null);
   const [chatHistories, setChatHistories] = useState(() => {
     const h = {};
     AGENTS.forEach(a => { h[a.id] = []; });
     return h;
   });
+
+  const toggleMusic = useCallback(async () => {
+    if (musicPlaying) {
+      if (musicRef.current) {
+        musicRef.current.forEach(n => n.dispose());
+        musicRef.current = null;
+      }
+      Tone.getTransport().stop();
+      setMusicPlaying(false);
+      return;
+    }
+
+    await Tone.start();
+
+    const reverb = new Tone.Reverb({ decay: 8, wet: 0.7 }).toDestination();
+    const delay = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.3, wet: 0.25 }).connect(reverb);
+    const filter = new Tone.Filter({ frequency: 800, type: "lowpass" }).connect(delay);
+
+    const pad = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "sine" },
+      envelope: { attack: 2, decay: 3, sustain: 0.4, release: 4 },
+      volume: -18
+    }).connect(filter);
+
+    const pluck = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.01, decay: 1.5, sustain: 0, release: 2 },
+      volume: -22
+    }).connect(delay);
+
+    const chords = [
+      ["C3", "E3", "G3", "B3"],
+      ["A2", "C3", "E3", "G3"],
+      ["F2", "A2", "C3", "E3"],
+      ["G2", "B2", "D3", "F3"],
+    ];
+    const melodyNotes = ["E4", "G4", "B4", "A4", "G4", "E4", "D4", "C4", "E4", "G4", "A4", "B4"];
+    let chordIdx = 0;
+    let melodyIdx = 0;
+
+    const chordLoop = new Tone.Loop((time) => {
+      pad.triggerAttackRelease(chords[chordIdx % chords.length], "3n", time);
+      chordIdx++;
+    }, "2m");
+
+    const melodyLoop = new Tone.Loop((time) => {
+      if (Math.random() > 0.35) {
+        pluck.triggerAttackRelease(melodyNotes[melodyIdx % melodyNotes.length], "8n", time);
+      }
+      melodyIdx++;
+    }, "4n");
+
+    chordLoop.start(0);
+    melodyLoop.start("1m");
+    Tone.getTransport().bpm.value = 65;
+    Tone.getTransport().start();
+
+    musicRef.current = [pad, pluck, reverb, delay, filter, chordLoop, melodyLoop];
+    setMusicPlaying(true);
+  }, [musicPlaying]);
+
+  useEffect(() => {
+    return () => {
+      if (musicRef.current) {
+        musicRef.current.forEach(n => n.dispose());
+        Tone.getTransport().stop();
+      }
+    };
+  }, []);
+
+  // Auto-play music on first user interaction
+  useEffect(() => {
+    const autoStart = () => {
+      if (!musicAutoStarted.current) {
+        musicAutoStarted.current = true;
+        toggleMusic();
+        window.removeEventListener("mousedown", autoStart);
+        window.removeEventListener("wheel", autoStart);
+        window.removeEventListener("keydown", autoStart);
+      }
+    };
+    window.addEventListener("mousedown", autoStart);
+    window.addEventListener("wheel", autoStart);
+    window.addEventListener("keydown", autoStart);
+    return () => {
+      window.removeEventListener("mousedown", autoStart);
+      window.removeEventListener("wheel", autoStart);
+      window.removeEventListener("keydown", autoStart);
+    };
+  }, [toggleMusic]);
 
   const chatEndRef = useRef(null);
   const agentsRef = useRef(agents);
@@ -135,53 +231,321 @@ export default function ClawHQ() {
     const mat = (c, em = 0, ei = 0) => new THREE.MeshLambertMaterial({ color: c, emissive: em, emissiveIntensity: ei });
 
     // Floor
-    const floor = new THREE.Mesh(new THREE.BoxGeometry(18, 0.2, 14), mat(0xd4c5a0));
-    floor.position.y = -0.1;
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(30, 0.2, 14), mat(0xd4c5a0));
+    floor.position.set(6, -0.1, 0);
     floor.receiveShadow = true;
     scene.add(floor);
 
     // Grid
     const gm = mat(0xc4b590);
-    for (let i = -8; i <= 8; i++) { const l = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.01, 14), gm); l.position.set(i, 0.01, 0); scene.add(l); }
-    for (let i = -6; i <= 6; i++) { const l = new THREE.Mesh(new THREE.BoxGeometry(18, 0.01, 0.02), gm); l.position.set(0, 0.01, i); scene.add(l); }
+    for (let i = -8; i <= 20; i++) { const l = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.01, 14), gm); l.position.set(i, 0.01, 0); scene.add(l); }
+    for (let i = -6; i <= 6; i++) { const l = new THREE.Mesh(new THREE.BoxGeometry(30, 0.01, 0.02), gm); l.position.set(6, 0.01, i); scene.add(l); }
 
     // Walls
     const wm = mat(0x888888);
     const wallH = 1.5;
-    const bw = new THREE.Mesh(new THREE.BoxGeometry(18, wallH, 0.15), wm); bw.position.set(0, wallH / 2, -7); bw.castShadow = true; scene.add(bw);
+    // Back wall (extended)
+    const bw = new THREE.Mesh(new THREE.BoxGeometry(30, wallH, 0.15), wm); bw.position.set(6, wallH / 2, -7); bw.castShadow = true; scene.add(bw);
+    // Left wall
     const lw = new THREE.Mesh(new THREE.BoxGeometry(0.15, wallH, 14), wm); lw.position.set(-9, wallH / 2, 0); lw.castShadow = true; scene.add(lw);
-    const rw = new THREE.Mesh(new THREE.BoxGeometry(0.15, wallH, 14), wm); rw.position.set(9, wallH / 2, 0); rw.castShadow = true; scene.add(rw);
+    // Right wall (moved to x:21)
+    const rw = new THREE.Mesh(new THREE.BoxGeometry(0.15, wallH, 14), wm); rw.position.set(21, wallH / 2, 0); rw.castShadow = true; scene.add(rw);
+    // Front wall left
     const fwl = new THREE.Mesh(new THREE.BoxGeometry(6, wallH, 0.15), wm); fwl.position.set(-6, wallH / 2, 7); scene.add(fwl);
+    // Front wall middle-right (original)
     const fwr = new THREE.Mesh(new THREE.BoxGeometry(6, wallH, 0.15), wm); fwr.position.set(6, wallH / 2, 7); scene.add(fwr);
+    // Front wall sports room
+    const fwsr = new THREE.Mesh(new THREE.BoxGeometry(12, wallH, 0.15), wm); fwsr.position.set(15, wallH / 2, 7); scene.add(fwsr);
+    // Dividing wall with doorway (between main office and sports room)
+    // Top section (above door)
+    const divWallTop = new THREE.Mesh(new THREE.BoxGeometry(0.15, wallH, 4), wm); divWallTop.position.set(9, wallH / 2, -5); divWallTop.castShadow = true; scene.add(divWallTop);
+    // Bottom section (below door)
+    const divWallBot = new THREE.Mesh(new THREE.BoxGeometry(0.15, wallH, 5), wm); divWallBot.position.set(9, wallH / 2, 4.5); divWallBot.castShadow = true; scene.add(divWallBot);
+    // Doorway is at z: -3 to 2 (5 units wide opening)
 
-    // Desks
-    function mkDesk(x, z, rot = 0) {
+    // ===== SPORTS ROOM (x: 9 to 21) =====
+    // Sports room floor accent (slightly different shade)
+    const sportsFloor = new THREE.Mesh(new THREE.BoxGeometry(11.7, 0.01, 13.5), mat(0xcfbf95));
+    sportsFloor.position.set(15, 0.02, 0); scene.add(sportsFloor);
+
+    // Billiard / Pool table — back of sports room (top in view)
+    const poolTop = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 1.4), mat(0x0a5c2a));
+    poolTop.position.set(15, 0.82, -3); poolTop.castShadow = true; scene.add(poolTop);
+    const poolFrame = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.12, 1.6), mat(0x3a2a15));
+    poolFrame.position.set(15, 0.78, -3); poolFrame.castShadow = true; scene.add(poolFrame);
+    [[-1.2,-0.6],[1.2,-0.6],[-1.2,0.6],[1.2,0.6]].forEach(([lx,lz]) => {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.75, 0.12), mat(0x3a2a15));
+      leg.position.set(15+lx, 0.38, -3+lz); leg.castShadow = true; scene.add(leg);
+    });
+    const pocketGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.02, 8);
+    const pocketMat = mat(0x111111);
+    [[-1.2,-0.6],[0,-0.6],[1.2,-0.6],[-1.2,0.6],[0,0.6],[1.2,0.6]].forEach(([px,pz]) => {
+      const pocket = new THREE.Mesh(pocketGeo, pocketMat);
+      pocket.position.set(15+px, 0.87, -3+pz); scene.add(pocket);
+    });
+    // Cue rack on back wall behind pool
+    const cueRack = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 0.08), mat(0x3a2a15));
+    cueRack.position.set(15, 0.8, -6.85); scene.add(cueRack);
+    for (let ci = 0; ci < 3; ci++) {
+      const cue = new THREE.Mesh(new THREE.BoxGeometry(0.02, 1.2, 0.02), mat(0xc8a050));
+      cue.position.set(14.7 + ci * 0.3, 0.8, -6.82); scene.add(cue);
+    }
+
+    // Ping pong table — front of sports room (bottom in view)
+    const pp = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.05, 1.2), mat(0x1a5533));
+    pp.position.set(15, 0.75, 3); pp.castShadow = true; scene.add(pp);
+    const ppn = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.15, 1.2), mat(0xcccccc));
+    ppn.position.set(15, 0.85, 3); scene.add(ppn);
+    [[-0.9,-0.4],[0.9,-0.4],[-0.9,0.4],[0.9,0.4]].forEach(([lx,lz]) => {
+      const l = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.75, 0.06), mat(0x555555));
+      l.position.set(15+lx, 0.375, 3+lz); scene.add(l);
+    });
+    // Sports room plants
+    mkPlant(10, -6); mkPlant(10, 5.5); mkPlant(20, -6); mkPlant(20, 5.5);
+
+    // Wall screens with live trading charts
+    const wallScreenTextures = [];
+
+    function mkScreen(x, y, z, chartType = "line") {
+      const f = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.8, 0.06), mat(0x111118)); f.position.set(x, y, z); scene.add(f);
+      const canvas = document.createElement("canvas");
+      canvas.width = 192; canvas.height = 108;
+      const ctx = canvas.getContext("2d");
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      const scrMat = new THREE.MeshBasicMaterial({ map: texture });
+      const s = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.65), scrMat);
+      s.position.set(x, y, z + 0.04); scene.add(s);
+      const data = [];
+      let price = 50 + Math.random() * 50;
+      for (let i = 0; i < 40; i++) {
+        price += (Math.random() - 0.48) * 4;
+        price = Math.max(10, Math.min(100, price));
+        data.push(price);
+      }
+      wallScreenTextures.push({ ctx, texture, canvas, data, chartType, offset: Math.random() * 100 });
+    }
+
+    function updateWallScreens(time) {
+      wallScreenTextures.forEach(({ ctx, texture, data, chartType, offset }) => {
+        const w = 192, h = 108;
+        ctx.fillStyle = "#060d06";
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = "rgba(20,241,149,0.08)";
+        ctx.lineWidth = 0.5;
+        for (let gy = 20; gy < h; gy += 20) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke(); }
+        for (let gx = 20; gx < w; gx += 20) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke(); }
+        let price = data[data.length - 1];
+        price += (Math.sin(time * 2 + offset) * 1.5 + (Math.random() - 0.48) * 2);
+        price = Math.max(10, Math.min(100, price));
+        data.push(price);
+        if (data.length > 60) data.shift();
+        const minP = Math.min(...data) - 5;
+        const maxP = Math.max(...data) + 5;
+        const range = maxP - minP || 1;
+        if (chartType === "line") {
+          ctx.beginPath();
+          data.forEach((p, i) => { const px = (i / (data.length - 1)) * w; const py = h - 15 - ((p - minP) / range) * (h - 30); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
+          ctx.strokeStyle = "#14f195"; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+          const grad = ctx.createLinearGradient(0, 0, 0, h);
+          grad.addColorStop(0, "rgba(20,241,149,0.25)"); grad.addColorStop(1, "rgba(20,241,149,0.02)");
+          ctx.fillStyle = grad; ctx.fill();
+        } else if (chartType === "candle") {
+          const barW = w / data.length;
+          for (let i = 1; i < data.length; i++) {
+            const open = data[i - 1], close = data[i];
+            const high = Math.max(open, close) + Math.random() * 3, low = Math.min(open, close) - Math.random() * 3;
+            const isUp = close >= open; const px = i * barW;
+            const openY = h - 15 - ((open - minP) / range) * (h - 30);
+            const closeY = h - 15 - ((close - minP) / range) * (h - 30);
+            const highY = h - 15 - ((high - minP) / range) * (h - 30);
+            const lowY = h - 15 - ((low - minP) / range) * (h - 30);
+            ctx.strokeStyle = isUp ? "#14f195" : "#ff4444"; ctx.lineWidth = 0.5;
+            ctx.beginPath(); ctx.moveTo(px, highY); ctx.lineTo(px, lowY); ctx.stroke();
+            ctx.fillStyle = isUp ? "#14f195" : "#ff4444";
+            ctx.fillRect(px - barW * 0.3, Math.min(openY, closeY), barW * 0.6, Math.max(Math.abs(closeY - openY), 1));
+          }
+        } else if (chartType === "bar") {
+          const barW = w / data.length;
+          data.forEach((p, i) => {
+            const barH = ((p - minP) / range) * (h - 30);
+            ctx.fillStyle = (i > 0 ? data[i] >= data[i - 1] : true) ? "rgba(20,241,149,0.6)" : "rgba(255,68,68,0.6)";
+            ctx.fillRect(i * barW + 1, h - 15 - barH, barW - 2, barH);
+          });
+        }
+        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 0, w, 14);
+        ctx.fillStyle = "#14f195"; ctx.font = "bold 8px monospace";
+        ctx.fillText({ line: "SOL/USDC", candle: "BTC/USD", bar: "VOLUME 24H" }[chartType] || "MARKET", 4, 10);
+        ctx.fillStyle = price > data[data.length - 2] ? "#14f195" : "#ff4444";
+        ctx.textAlign = "right"; ctx.fillText("$" + price.toFixed(2), w - 4, 10); ctx.textAlign = "left";
+        ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.fillRect(0, h - 10, w, 10);
+        ctx.fillStyle = "#444444"; ctx.font = "6px monospace";
+        const now = new Date();
+        ctx.fillText(`${now.getHours()}:${now.getMinutes().toString().padStart(2,"0")}`, 4, h - 3);
+        ctx.fillText("LIVE", w - 22, h - 3);
+        texture.needsUpdate = true;
+      });
+    }
+
+    // Sports room wall screens
+    mkScreen(13, 1, -6.9, "line");
+    mkScreen(17, 1, -6.9, "candle");
+
+    // Main office screens
+    mkScreen(0, 1, -6.9, "candle");
+    mkScreen(4, 1, -6.9, "line");
+    mkScreen(-4, 1, -6.9, "bar");
+
+    // Game play positions
+    // Ping pong (x:15, z:3) — 2 players on opposite ends
+    const pingPongSpots = [
+      { x: 13.6, z: 3, faceAngle: Math.PI / 2, game: "pingpong" },   // left side
+      { x: 16.4, z: 3, faceAngle: -Math.PI / 2, game: "pingpong" },  // right side
+    ];
+    // Billiards (x:15, z:-3) — 2 players on opposite sides
+    const billiardSpots = [
+      { x: 13.2, z: -3, faceAngle: Math.PI / 2, game: "billiards" },  // left side
+      { x: 16.8, z: -3, faceAngle: -Math.PI / 2, game: "billiards" }, // right side
+    ];
+    const allGameSpots = [...pingPongSpots, ...billiardSpots];
+    const occupiedGameSpots = new Set();
+
+    // Game balls — hidden until agents are playing
+    // Ping pong ball (small white sphere)
+    const ppBall = new THREE.Mesh(
+      new THREE.SphereGeometry(0.04, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    ppBall.position.set(15, 0.9, 3);
+    ppBall.visible = false;
+    scene.add(ppBall);
+
+    // Billiard balls (several colored balls on the table)
+    const billiardBalls = [];
+    const ballColors = [0xff0000, 0xffff00, 0x0000ff, 0xff8800, 0x00aa00, 0x880088];
+    ballColors.forEach((color, i) => {
+      const ball = new THREE.Mesh(
+        new THREE.SphereGeometry(0.045, 8, 8),
+        new THREE.MeshLambertMaterial({ color })
+      );
+      // Spread balls across the table
+      const bx = 14.5 + (i % 3) * 0.5;
+      const bz = -3.15 + Math.floor(i / 3) * 0.3;
+      ball.position.set(bx, 0.9, bz);
+      ball.visible = false;
+      ball.userData.baseX = bx;
+      ball.userData.baseZ = bz;
+      scene.add(ball);
+      billiardBalls.push(ball);
+    });
+    // Cue ball (white)
+    const cueBall = new THREE.Mesh(
+      new THREE.SphereGeometry(0.045, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    cueBall.position.set(15.8, 0.9, -3);
+    cueBall.visible = false;
+    cueBall.userData.baseX = 15.8;
+    cueBall.userData.baseZ = -3;
+    scene.add(cueBall);
+    billiardBalls.push(cueBall);
+
+    // Desks — each assigned to an agent with live screen
+    const screenCanvases = {};
+    const screenTextures = {};
+    const screenCtxs = {};
+    const monitorMeshes = {};
+
+    function mkDesk(x, z, rot, agent) {
       const g = new THREE.Group();
       const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.06, 0.7), mat(0x3a3020)); top.position.y = 0.7; top.castShadow = true; g.add(top);
       const lgeo = new THREE.BoxGeometry(0.06, 0.7, 0.06); const lm = mat(0x2a2a30);
       [[-0.5, -0.25], [0.5, -0.25], [-0.5, 0.25], [0.5, 0.25]].forEach(([lx, lz]) => { const l = new THREE.Mesh(lgeo, lm); l.position.set(lx, 0.35, lz); g.add(l); });
-      const mon = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.04), mat(0x111118, 0x14f195, 0.3)); mon.position.set(0, 1.05, -0.2); mon.castShadow = true; g.add(mon);
-      const scr = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.28, 0.01), mat(0x0a1a15, 0x14f195, 0.6)); scr.position.set(0, 1.05, -0.17); g.add(scr);
 
-      // Office chair (positioned in front of desk)
-      const chairColor = 0x333345;
-      // Seat cushion
-      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.4), mat(chairColor));
-      seat.position.set(0, 0.45, 0.55); seat.castShadow = true; g.add(seat);
-      // Backrest
-      const back = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.32, 0.05), mat(chairColor));
-      back.position.set(0, 0.65, 0.73); back.castShadow = true; g.add(back);
-      // Center pole
+      // Monitor frame
+      const mon = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.35, 0.04), mat(0x111118)); mon.position.set(0, 1.05, -0.2); mon.castShadow = true; g.add(mon);
+
+      // Live screen using canvas texture
+      const canvas = document.createElement("canvas");
+      canvas.width = 128; canvas.height = 96;
+      const ctx = canvas.getContext("2d");
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.minFilter = THREE.LinearFilter;
+      const scrMat = new THREE.MeshBasicMaterial({ map: texture });
+      const scr = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.28), scrMat);
+      scr.position.set(0, 1.05, -0.17);
+      g.add(scr);
+
+      if (agent) {
+        mon.userData.agentId = agent.id;
+        scr.userData.agentId = agent.id;
+        monitorMeshes[agent.id] = [mon, scr];
+        screenCanvases[agent.id] = canvas;
+        screenTextures[agent.id] = texture;
+        screenCtxs[agent.id] = ctx;
+      }
+
+      // Monitor stand
+      const stand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.06), mat(0x111118)); stand.position.set(0, 0.82, -0.2); g.add(stand);
+      const standBase = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.02, 0.12), mat(0x111118)); standBase.position.set(0, 0.74, -0.2); g.add(standBase);
+
+      // Keyboard
+      const kb = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.02, 0.12), mat(0x222228)); kb.position.set(0, 0.74, 0.05); g.add(kb);
+      for (let row = 0; row < 3; row++) {
+        const keyRow = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.005, 0.025), mat(0x333340));
+        keyRow.position.set(0, 0.755, -0.01 + row * 0.035); g.add(keyRow);
+      }
+      const spacebar = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.005, 0.025), mat(0x333340));
+      spacebar.position.set(0, 0.755, 0.1); g.add(spacebar);
+
+      // Mouse
+      const mouseBody = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.025, 0.09), mat(0x222228));
+      mouseBody.position.set(0.28, 0.74, 0.05); g.add(mouseBody);
+      const mouseTop = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.01, 0.07), mat(0x2a2a35));
+      mouseTop.position.set(0.28, 0.755, 0.045); g.add(mouseTop);
+      const scroll = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.008, 0.02), mat(0x444450));
+      scroll.position.set(0.28, 0.762, 0.03); g.add(scroll);
+      const mousePad = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.005, 0.2), mat(0x1a1a22));
+      mousePad.position.set(0.28, 0.725, 0.05); g.add(mousePad);
+
+      // Name plate on desk
+      if (agent) {
+        const plateColor = agent.color;
+        const plate = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.08, 0.02), mat(plateColor));
+        plate.position.set(-0.35, 0.78, -0.2); g.add(plate);
+        // Name text via small canvas
+        const nameCanvas = document.createElement("canvas");
+        nameCanvas.width = 64; nameCanvas.height = 16;
+        const nctx = nameCanvas.getContext("2d");
+        nctx.fillStyle = "#0a0a0f";
+        nctx.fillRect(0, 0, 64, 16);
+        nctx.fillStyle = "#ffffff";
+        nctx.font = "bold 10px monospace";
+        nctx.textAlign = "center";
+        nctx.fillText(agent.name, 32, 12);
+        const nameTex = new THREE.CanvasTexture(nameCanvas);
+        nameTex.minFilter = THREE.LinearFilter;
+        const nameMat = new THREE.MeshBasicMaterial({ map: nameTex });
+        const nameTag = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.06), nameMat);
+        nameTag.position.set(-0.35, 0.78, -0.19);
+        g.add(nameTag);
+      }
+
+      // Office chair
+      const chairColor = agent ? agent.color : 0x333345;
+      const seatMesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.4), mat(chairColor));
+      seatMesh.position.set(0, 0.45, 0.55); seatMesh.castShadow = true; g.add(seatMesh);
+      const backMesh = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.32, 0.05), mat(chairColor));
+      backMesh.position.set(0, 0.65, 0.73); backMesh.castShadow = true; g.add(backMesh);
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 6), mat(0x555555));
       pole.position.set(0, 0.27, 0.55); g.add(pole);
-      // Base star (5 legs)
       for (let j = 0; j < 5; j++) {
         const angle = (j / 5) * Math.PI * 2;
         const legMesh = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.22), mat(0x555555));
         legMesh.position.set(Math.sin(angle) * 0.1, 0.1, 0.55 + Math.cos(angle) * 0.1);
         legMesh.rotation.y = angle;
         g.add(legMesh);
-        // Wheel at end
         const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 6), mat(0x222222));
         wheel.position.set(Math.sin(angle) * 0.2, 0.04, 0.55 + Math.cos(angle) * 0.2);
         wheel.rotation.x = Math.PI / 2;
@@ -190,8 +554,145 @@ export default function ClawHQ() {
 
       g.position.set(x, 0, z); g.rotation.y = rot; scene.add(g);
     }
-    [[-5,-3,0],[-3,-3,0],[-1,-3,0],
-     [-5,-1,Math.PI],[-3,-1,Math.PI],[-1,-1,Math.PI]].forEach(([x,z,r]) => mkDesk(x,z,r));
+
+    // Assign desks to agents
+    const deskPositions = [
+      [-6,-5,0], [-3,-5,0], [0,-5,0],
+      [-6,-2,Math.PI], [-3,-2,Math.PI], [0,-2,Math.PI]
+    ];
+    const agentSeatPositions = {};
+    AGENTS.forEach((a, i) => {
+      const [x, z, r] = deskPositions[i];
+      mkDesk(x, z, r, a);
+      // Chair is at local z=0.55, rotated by desk rotation
+      const seatX = x + Math.sin(r) * 0.55;
+      const seatZ = z + Math.cos(r) * 0.55;
+      // Agent faces the desk (opposite of chair front)
+      const faceAngle = r + Math.PI;
+      agentSeatPositions[a.id] = { x: seatX, z: seatZ, faceAngle, deskRot: r };
+    });
+    seatPositionsRef.current = agentSeatPositions;
+
+    // Screen update function — draws live terminal-style display
+    const screenLines = {};
+    AGENTS.forEach(a => { screenLines[a.id] = []; });
+
+    const screenMessages = {
+      alpha: ["Scanning Jupiter routes...", "SOL/USDC spread: 0.02%", "Executing swap: 2 SOL", "TX confirmed: 5xK7m...", "P&L: +0.34 SOL", "Checking orderbook depth"],
+      bravo: ["Analyzing yield farms...", "APY comparison running", "Rebalancing portfolio", "Moving 30% to stables", "Risk score: LOW", "DeFi TVL: $4.2B"],
+      cipher: ["Querying on-chain data...", "Parsing 1,247 txns", "Anomaly detected: 0x8f..", "Report generated", "Clustering wallets...", "Data pipeline healthy"],
+      delta: ["Scanning NFT floors...", "Tensor: 12.4 SOL floor", "New collection alert!", "Rarity analysis done", "Listing snipe ready", "Watching 3 collections"],
+      echo: ["TX queue: 3 pending", "Sending 0.5 SOL to 7xQ..", "Confirmed in 400ms", "Gas: 0.000005 SOL", "Batch TX: 5/5 done", "Nonce updated"],
+      flux: ["Market feed active", "SOL: $168.42 (+2.1%)", "Volume spike: RAY/SOL", "Alert: BTC dominance ↓", "Monitoring 47 pairs", "Sentiment: bullish"],
+    };
+
+    function updateScreen(agentId, time) {
+      const ctx = screenCtxs[agentId];
+      const tex = screenTextures[agentId];
+      const agent = AGENTS.find(a => a.id === agentId);
+      if (!ctx || !tex || !agent) return;
+
+      // Check if agent is sitting at their desk
+      const target = agentTargetsRef.current[agentId];
+      const isAtDesk = target && target.sitting;
+
+      const r = (agent.color >> 16) & 0xff;
+      const g = (agent.color >> 8) & 0xff;
+      const b = agent.color & 0xff;
+
+      if (!isAtDesk) {
+        // === IDLE SCREEN — agent not at desk ===
+        ctx.fillStyle = "#050805";
+        ctx.fillRect(0, 0, 128, 96);
+
+        // Header bar dimmed
+        ctx.fillStyle = `rgba(${r},${g},${b},0.1)`;
+        ctx.fillRect(0, 0, 128, 12);
+        ctx.fillStyle = "#444444";
+        ctx.font = "bold 8px monospace";
+        ctx.fillText(agent.name.toUpperCase(), 4, 9);
+
+        // Status: IDLE
+        ctx.fillStyle = "#ffaa22";
+        ctx.fillRect(108, 3, 6, 6);
+        ctx.fillStyle = "#555555";
+        ctx.font = "6px monospace";
+        ctx.fillText("IDLE", 88, 9);
+
+        // Idle message centered
+        ctx.fillStyle = "#333333";
+        ctx.font = "7px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("Agent away", 64, 42);
+        ctx.fillText("Waiting for return...", 64, 54);
+        ctx.textAlign = "left";
+
+        // Dim bottom bar
+        ctx.fillStyle = "rgba(255,255,255,0.05)";
+        ctx.fillRect(0, 86, 128, 10);
+        ctx.fillStyle = "#333333";
+        ctx.font = "6px monospace";
+        ctx.fillText("disconnected", 4, 93);
+
+        tex.needsUpdate = true;
+        // Clear terminal lines when away
+        screenLines[agentId] = [];
+        return;
+      }
+
+      // === ACTIVE SCREEN — agent is working at desk ===
+      ctx.fillStyle = "#0a0f0a";
+      ctx.fillRect(0, 0, 128, 96);
+
+      // Header bar
+      ctx.fillStyle = `rgba(${r},${g},${b},0.3)`;
+      ctx.fillRect(0, 0, 128, 12);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 8px monospace";
+      ctx.fillText(agent.name.toUpperCase(), 4, 9);
+
+      // Status: RUNNING
+      ctx.fillStyle = "#14f195";
+      ctx.fillRect(108, 3, 6, 6);
+      ctx.fillStyle = "#666666";
+      ctx.font = "6px monospace";
+      ctx.fillText("RUN", 88, 9);
+
+      // Terminal lines
+      const msgs = screenMessages[agentId] || ["..."];
+      const lines = screenLines[agentId];
+
+      // Add new line periodically
+      if (Math.floor(time * 0.5) !== Math.floor((time - 0.05) * 0.5)) {
+        lines.push(msgs[Math.floor(Math.random() * msgs.length)]);
+        if (lines.length > 7) lines.shift();
+      }
+
+      ctx.fillStyle = "#14f195";
+      ctx.font = "7px monospace";
+      lines.forEach((line, i) => {
+        const alpha = 0.4 + (i / lines.length) * 0.6;
+        ctx.fillStyle = `rgba(20,241,149,${alpha})`;
+        ctx.fillText("> " + line, 4, 22 + i * 10);
+      });
+
+      // Blinking cursor
+      if (Math.floor(time * 2) % 2 === 0) {
+        ctx.fillStyle = "#14f195";
+        ctx.fillRect(4, 22 + lines.length * 10, 5, 7);
+      }
+
+      // Bottom status bar
+      ctx.fillStyle = "rgba(255,255,255,0.1)";
+      ctx.fillRect(0, 86, 128, 10);
+      ctx.fillStyle = "#666666";
+      ctx.font = "6px monospace";
+      const now = new Date();
+      ctx.fillText(`${now.getHours().toString().padStart(2,"0")}:${now.getMinutes().toString().padStart(2,"0")}:${now.getSeconds().toString().padStart(2,"0")}`, 4, 93);
+      ctx.fillText("solana-mainnet", 60, 93);
+
+      tex.needsUpdate = true;
+    }
 
     // Meeting table
     const mt = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.08, 32), mat(0x3a3020)); mt.position.set(-5, 0.72, 4); mt.castShadow = true; scene.add(mt);
@@ -245,13 +746,36 @@ export default function ClawHQ() {
     mkCouch(5, 5.5, Math.PI, 0x352a40);
     mkCouch(7.5, 4.2, -Math.PI / 2, 0x2a3545);
 
+    // Sofa seat positions — calculated from couch geometry
+    // Couch backrest is at local z=-0.3, seat cushion at local z=0 to z=0.4
+    // Agent should sit on cushion facing AWAY from backrest (toward +z in local space)
+    const sofaSeats = [
+      // Couch 1 (x:5, z:3, rot:0) — backrest at world z=2.7, seat at z=3.0-3.4, face +z
+      { x: 4.4, z: 3.2, faceAngle: 0, seatY: 0.2 },
+      { x: 5, z: 3.2, faceAngle: 0, seatY: 0.2 },
+      { x: 5.6, z: 3.2, faceAngle: 0, seatY: 0.2 },
+      // Couch 2 (x:5, z:5.5, rot:PI) — rotated 180, backrest at world z=5.8, seat at z=5.5-5.1, face -z
+      { x: 4.4, z: 5.3, faceAngle: Math.PI, seatY: 0.2 },
+      { x: 5, z: 5.3, faceAngle: Math.PI, seatY: 0.2 },
+      { x: 5.6, z: 5.3, faceAngle: Math.PI, seatY: 0.2 },
+      // Couch 3 (x:7.5, z:4.2, rot:-PI/2) — rotated -90, backrest at world x=7.8, seat at x=7.5-7.1, face -x
+      { x: 7.3, z: 3.8, faceAngle: -Math.PI / 2, seatY: 0.2 },
+      { x: 7.3, z: 4.6, faceAngle: -Math.PI / 2, seatY: 0.2 },
+    ];
+    const occupiedSofaSeats = new Set();
+
     // Coffee table
     const ct = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.6), mat(0x3a3020)); ct.position.set(5, 0.4, 4.25); scene.add(ct);
+    // Coffee table legs
+    const ctLegGeo = new THREE.BoxGeometry(0.05, 0.38, 0.05);
+    const ctLegMat = mat(0x2a2a30);
+    [[-0.5, -0.22], [0.5, -0.22], [-0.5, 0.22], [0.5, 0.22]].forEach(([lx, lz]) => {
+      const leg = new THREE.Mesh(ctLegGeo, ctLegMat);
+      leg.position.set(5 + lx, 0.19, 4.25 + lz);
+      scene.add(leg);
+    });
 
-    // Ping pong
-    const pp = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.05, 1.2), mat(0x1a5533)); pp.position.set(1, 0.75, 5.5); pp.castShadow = true; scene.add(pp);
-    const ppn = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.15, 1.2), mat(0xcccccc)); ppn.position.set(1, 0.85, 5.5); scene.add(ppn);
-    [[-0.9,-0.4],[0.9,-0.4],[-0.9,0.4],[0.9,0.4]].forEach(([lx,lz]) => { const l = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.75, 0.06), mat(0x555555)); l.position.set(1+lx, 0.375, 5.5+lz); scene.add(l); });
+    // (Ping pong moved to sports room)
 
     // Server racks
     function mkRack(x, z) {
@@ -263,46 +787,47 @@ export default function ClawHQ() {
     }
     mkRack(8.2, -6); mkRack(8.2, -5); mkRack(8.2, -4);
 
-    // Wall screens
-    function mkScreen(x, y, z) {
-      const f = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.8, 0.06), mat(0x111118)); f.position.set(x, y, z); scene.add(f);
-      const s = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.65, 0.01), mat(0x050a08, 0x14f195, 0.4)); s.position.set(x, y, z + 0.04); scene.add(s);
-    }
-    mkScreen(0, 2, -6.9); mkScreen(4, 2, -6.9); mkScreen(-4, 2, -6.9);
-
     // Plants
     function mkPlant(x, z) {
       const p = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.15, 0.3, 8), mat(0x553322)); p.position.set(x, 0.15, z); scene.add(p);
       const lv = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.35, 0.6, 6), mat(0x226633, 0x14f195, 0.1)); lv.position.set(x, 0.6, z); scene.add(lv);
     }
-    mkPlant(-8.3, -6); mkPlant(-8.3, 0); mkPlant(-8.3, 5); mkPlant(8.3, 0); mkPlant(8.3, 5);
+    mkPlant(-8.3, -6); mkPlant(-8.3, 0); mkPlant(-8.3, 5);
 
     // ===== COLLISION OBSTACLES (AABB: { minX, maxX, minZ, maxZ }) =====
     const obstacles = [];
     // Walls
-    obstacles.push({ minX: -9.1, maxX: 9.1, minZ: -7.15, maxZ: -6.85 }); // back wall
+    obstacles.push({ minX: -9.1, maxX: 21.1, minZ: -7.15, maxZ: -6.85 }); // back wall (extended)
     obstacles.push({ minX: -9.15, maxX: -8.85, minZ: -7, maxZ: 7 }); // left wall
-    obstacles.push({ minX: 8.85, maxX: 9.15, minZ: -7, maxZ: 7 }); // right wall
+    obstacles.push({ minX: 20.85, maxX: 21.15, minZ: -7, maxZ: 7 }); // right wall (moved)
     obstacles.push({ minX: -9, maxX: -3, minZ: 6.85, maxZ: 7.15 }); // front wall left
-    obstacles.push({ minX: 3, maxX: 9, minZ: 6.85, maxZ: 7.15 }); // front wall right
-    // Desks (each desk ~1.2 x 0.7 centered at position)
-    [[-5,-3],[-3,-3],[-1,-3],[-5,-1],[-3,-1],[-1,-1]].forEach(([x,z]) => {
+    obstacles.push({ minX: 3, maxX: 9, minZ: 6.85, maxZ: 7.15 }); // front wall mid-right
+    obstacles.push({ minX: 9, maxX: 21, minZ: 6.85, maxZ: 7.15 }); // front wall sports room
+    // Dividing wall (with doorway at z:-3 to z:2)
+    obstacles.push({ minX: 8.85, maxX: 9.15, minZ: -7, maxZ: -3 }); // dividing wall top
+    obstacles.push({ minX: 8.85, maxX: 9.15, minZ: 2, maxZ: 7 }); // dividing wall bottom
+    // Desks
+    [[-6,-5],[-3,-5],[0,-5],[-6,-2],[-3,-2],[0,-2]].forEach(([x,z]) => {
       obstacles.push({ minX: x - 0.8, maxX: x + 0.8, minZ: z - 0.5, maxZ: z + 0.5 });
     });
-    // Meeting table (circular r=1.5 approximated as box)
+    // Meeting table
     obstacles.push({ minX: -6.8, maxX: -3.2, minZ: 2.2, maxZ: 5.8 });
     // Couches
-    obstacles.push({ minX: 3.8, maxX: 6.2, minZ: 2.4, maxZ: 3.6 }); // couch 1
-    obstacles.push({ minX: 3.8, maxX: 6.2, minZ: 4.9, maxZ: 6.1 }); // couch 2
-    obstacles.push({ minX: 6.9, maxX: 7.7, minZ: 3.0, maxZ: 5.4 }); // couch 3 (rotated)
+    obstacles.push({ minX: 3.8, maxX: 6.2, minZ: 2.4, maxZ: 3.6 });
+    obstacles.push({ minX: 3.8, maxX: 6.2, minZ: 4.9, maxZ: 6.1 });
+    obstacles.push({ minX: 6.9, maxX: 7.7, minZ: 3.0, maxZ: 5.4 });
     // Coffee table
     obstacles.push({ minX: 4.2, maxX: 5.8, minZ: 3.8, maxZ: 4.7 });
-    // Ping pong table
-    obstacles.push({ minX: -0.3, maxX: 2.3, minZ: 4.7, maxZ: 6.3 });
     // Server racks
     obstacles.push({ minX: 7.7, maxX: 8.7, minZ: -6.5, maxZ: -3.5 });
-    // Plants
-    [[-8.3,-6],[-8.3,0],[-8.3,5],[8.3,0],[8.3,5]].forEach(([x,z]) => {
+    // Billiard table (sports room - back/top, x:15, z:-3)
+    obstacles.push({ minX: 13.3, maxX: 16.7, minZ: -3.9, maxZ: -2.1 });
+    // Ping pong table (sports room - front/bottom, x:15, z:3)
+    obstacles.push({ minX: 13.7, maxX: 16.3, minZ: 2.2, maxZ: 3.8 });
+    // Cue rack (back wall, x:15)
+    obstacles.push({ minX: 14.2, maxX: 15.8, minZ: -7, maxZ: -6.5 });
+    // Plants (including sports room)
+    [[-8.3,-6],[-8.3,0],[-8.3,5],[10,-6],[10,5.5],[20,-6],[20,5.5]].forEach(([x,z]) => {
       obstacles.push({ minX: x - 0.3, maxX: x + 0.3, minZ: z - 0.3, maxZ: z + 0.3 });
     });
 
@@ -320,11 +845,11 @@ export default function ClawHQ() {
 
     function pickValidTarget() {
       for (let attempts = 0; attempts < 30; attempts++) {
-        const x = (Math.random() - 0.5) * 14;
-        const z = (Math.random() - 0.5) * 10;
+        const x = -8 + Math.random() * 28; // -8 to 20
+        const z = -6 + Math.random() * 12; // -6 to 6
         if (!isBlocked(x, z)) return { x, z };
       }
-      return { x: 0, z: 0 }; // fallback to center
+      return { x: 2, z: 0 };
     }
 
     // ===== AGENTS =====
@@ -485,7 +1010,7 @@ export default function ClawHQ() {
       g.position.set(sp.x, 0, sp.z);
       scene.add(g);
       agentMeshesRef.current[a.id] = g;
-      agentTargetsRef.current[a.id] = { x: sp.x, z: sp.z, timer: Math.random() * 3 + 2 };
+      agentTargetsRef.current[a.id] = { x: sp.x, z: sp.z, timer: Math.random() * 3 + 2, sitting: false, goToDesk: false, sitTimer: 0, commanded: false, sofaSitting: false, goToSofa: false, sofaSeatIdx: -1, sofaSitTimer: 0, playing: false, goToGame: false, gameSpotIdx: -1, playTimer: 0, playPhase: 0 };
     });
 
     // Camera update
@@ -520,12 +1045,351 @@ export default function ClawHQ() {
       Object.entries(agentTargetsRef.current).forEach(([id, target], agentIdx) => {
         const mesh = agentMeshesRef.current[id];
         if (!mesh) return;
+        const ud = mesh.userData;
+
+        // === SITTING STATE ===
+        if (target.sitting) {
+          const seat = agentSeatPositions[id];
+          if (seat) {
+            mesh.position.x = seat.x;
+            mesh.position.z = seat.z;
+            mesh.position.y = 0.18;
+            mesh.rotation.y = seat.faceAngle;
+            if (ud.legLPivot) ud.legLPivot.rotation.x = -1.2;
+            if (ud.legRPivot) ud.legRPivot.rotation.x = -1.2;
+            if (ud.armLPivot) { ud.armLPivot.rotation.x = -0.5; ud.armLPivot.rotation.z = 0; }
+            if (ud.armRPivot) { ud.armRPivot.rotation.x = -0.5; ud.armRPivot.rotation.z = 0; }
+          }
+          // Auto-stand after sitTimer expires (only if not commanded to stay)
+          if (!target.commanded) {
+            target.sitTimer -= dt;
+            if (target.sitTimer <= 0) {
+              target.sitting = false;
+              target.goToDesk = false;
+              mesh.position.y = 0;
+              if (ud.legLPivot) ud.legLPivot.rotation.x = 0;
+              if (ud.legRPivot) ud.legRPivot.rotation.x = 0;
+              if (ud.armLPivot) { ud.armLPivot.rotation.x = 0; ud.armLPivot.rotation.z = 0; }
+              if (ud.armRPivot) { ud.armRPivot.rotation.x = 0; ud.armRPivot.rotation.z = 0; }
+              // Step beside desk
+              if (seat) {
+                mesh.position.x = seat.x + Math.cos(seat.deskRot) * 1.2;
+                mesh.position.z = seat.z - Math.sin(seat.deskRot) * 1.2;
+              }
+              const valid = pickValidTarget();
+              target.x = valid.x;
+              target.z = valid.z;
+              target.timer = Math.random() * 6 + 4;
+            }
+          }
+          const ring = ud.ring;
+          if (ring) ring.material.opacity = 0.3 + Math.sin(Date.now() * 0.003) * 0.2;
+          return;
+        }
+
+        // === GOING TO DESK ===
+        if (target.goToDesk) {
+          const seat = agentSeatPositions[id];
+          if (seat) {
+            const dx = seat.x - mesh.position.x;
+            const dz = seat.z - mesh.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < 0.3) {
+              target.sitting = true;
+              target.goToDesk = false;
+              return;
+            }
+            const speed = 1.2 * dt;
+            mesh.position.x += (dx / dist) * speed;
+            mesh.position.z += (dz / dist) * speed;
+            mesh.rotation.y = Math.atan2(dx, dz);
+            ud.walkPhase = (ud.walkPhase || 0) + dt * 8;
+            const swing = Math.sin(ud.walkPhase) * 0.6;
+            if (ud.legLPivot) ud.legLPivot.rotation.x = swing;
+            if (ud.legRPivot) ud.legRPivot.rotation.x = -swing;
+            if (ud.armLPivot) { ud.armLPivot.rotation.x = -swing * 0.7; ud.armLPivot.rotation.z = 0; }
+            if (ud.armRPivot) { ud.armRPivot.rotation.x = swing * 0.7; ud.armRPivot.rotation.z = 0; }
+            mesh.position.y = 0;
+          }
+          const ring = ud.ring;
+          if (ring) ring.material.opacity = 0.3 + Math.sin(Date.now() * 0.003) * 0.2;
+          return;
+        }
+
+        // === SOFA SITTING STATE ===
+        if (target.sofaSitting) {
+          const seat = sofaSeats[target.sofaSeatIdx];
+          if (seat) {
+            mesh.position.x = seat.x;
+            mesh.position.z = seat.z;
+            mesh.position.y = seat.seatY;
+            mesh.rotation.y = seat.faceAngle;
+            // Relaxed sitting pose — legs bent forward, arms resting on armrests
+            if (ud.legLPivot) ud.legLPivot.rotation.x = -1.1;
+            if (ud.legRPivot) ud.legRPivot.rotation.x = -1.1;
+            if (ud.armLPivot) { ud.armLPivot.rotation.x = -0.2; ud.armLPivot.rotation.z = -0.4; }
+            if (ud.armRPivot) { ud.armRPivot.rotation.x = -0.2; ud.armRPivot.rotation.z = 0.4; }
+          }
+          // Auto-stand from sofa
+          target.sofaSitTimer -= dt;
+          if (target.sofaSitTimer <= 0) {
+            target.sofaSitting = false;
+            if (target.sofaSeatIdx >= 0) occupiedSofaSeats.delete(target.sofaSeatIdx);
+            target.sofaSeatIdx = -1;
+            mesh.position.y = 0;
+            if (ud.legLPivot) ud.legLPivot.rotation.x = 0;
+            if (ud.legRPivot) ud.legRPivot.rotation.x = 0;
+            if (ud.armLPivot) { ud.armLPivot.rotation.x = 0; ud.armLPivot.rotation.z = 0; }
+            if (ud.armRPivot) { ud.armRPivot.rotation.x = 0; ud.armRPivot.rotation.z = 0; }
+            // Step away from sofa — teleport to clear walkway area
+            mesh.position.x = 2 + (Math.random() - 0.5) * 2;
+            mesh.position.z = 1 + (Math.random() - 0.5) * 2;
+            const valid = pickValidTarget();
+            target.x = valid.x;
+            target.z = valid.z;
+            target.timer = Math.random() * 10 + 5;
+          }
+          const ring = ud.ring;
+          if (ring) ring.material.opacity = 0.3 + Math.sin(Date.now() * 0.003) * 0.2;
+          return;
+        }
+
+        // === GOING TO SOFA ===
+        if (target.goToSofa) {
+          const seat = sofaSeats[target.sofaSeatIdx];
+          if (seat) {
+            const dx = seat.x - mesh.position.x;
+            const dz = seat.z - mesh.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < 0.3) {
+              target.sofaSitting = true;
+              target.goToSofa = false;
+              return;
+            }
+            const speed = 1.2 * dt;
+            mesh.position.x += (dx / dist) * speed;
+            mesh.position.z += (dz / dist) * speed;
+            mesh.rotation.y = Math.atan2(dx, dz);
+            ud.walkPhase = (ud.walkPhase || 0) + dt * 8;
+            const swing = Math.sin(ud.walkPhase) * 0.6;
+            if (ud.legLPivot) ud.legLPivot.rotation.x = swing;
+            if (ud.legRPivot) ud.legRPivot.rotation.x = -swing;
+            if (ud.armLPivot) { ud.armLPivot.rotation.x = -swing * 0.7; ud.armLPivot.rotation.z = 0; }
+            if (ud.armRPivot) { ud.armRPivot.rotation.x = swing * 0.7; ud.armRPivot.rotation.z = 0; }
+            mesh.position.y = 0;
+          }
+          const ring = ud.ring;
+          if (ring) ring.material.opacity = 0.3 + Math.sin(Date.now() * 0.003) * 0.2;
+          return;
+        }
+
+        // === PLAYING GAME ===
+        if (target.playing) {
+          const spot = allGameSpots[target.gameSpotIdx];
+          if (spot) {
+            mesh.position.x = spot.x;
+            mesh.position.z = spot.z;
+            mesh.position.y = 0;
+            mesh.rotation.y = spot.faceAngle;
+
+            // Check if partner is also at the table (playing, not still walking)
+            let partnerReady = false;
+            Object.entries(agentTargetsRef.current).forEach(([otherId, ot]) => {
+              if (otherId === id) return;
+              if (ot.playing && ot.gameSpotIdx >= 0) {
+                const otherSpot = allGameSpots[ot.gameSpotIdx];
+                if (otherSpot && otherSpot.game === spot.game) partnerReady = true;
+              }
+            });
+
+            if (partnerReady) {
+              // Both players at table — play!
+              target.playPhase += dt * 6;
+
+              if (spot.game === "pingpong") {
+                if (ud.armRPivot) ud.armRPivot.rotation.x = -0.8 + Math.sin(target.playPhase) * 0.6;
+                if (ud.armLPivot) ud.armLPivot.rotation.x = -0.3;
+                if (ud.legLPivot) ud.legLPivot.rotation.x = Math.sin(target.playPhase * 0.5) * 0.15;
+                if (ud.legRPivot) ud.legRPivot.rotation.x = -Math.sin(target.playPhase * 0.5) * 0.15;
+              } else {
+                if (ud.armRPivot) { ud.armRPivot.rotation.x = -0.6 + Math.sin(target.playPhase * 0.3) * 0.2; ud.armRPivot.rotation.z = 0; }
+                if (ud.armLPivot) { ud.armLPivot.rotation.x = -0.6; ud.armLPivot.rotation.z = 0; }
+                if (ud.legLPivot) ud.legLPivot.rotation.x = 0.1;
+                if (ud.legRPivot) ud.legRPivot.rotation.x = -0.15;
+              }
+
+              // Only count down timer when both are playing
+              target.playTimer -= dt;
+            } else {
+              // Waiting for partner — idle standing pose at the table
+              if (ud.legLPivot) ud.legLPivot.rotation.x *= 0.9;
+              if (ud.legRPivot) ud.legRPivot.rotation.x *= 0.9;
+              if (ud.armLPivot) ud.armLPivot.rotation.x *= 0.9;
+              if (ud.armRPivot) ud.armRPivot.rotation.x *= 0.9;
+            }
+          }
+          // Auto-stop playing
+          target.playTimer -= dt;
+          if (target.playTimer <= 0) {
+            // Find partner at the same table and stop them too
+            const spot = allGameSpots[target.gameSpotIdx];
+            const gameType = spot?.game;
+            const mySpotIdx = target.gameSpotIdx;
+
+            // Stop this agent
+            target.playing = false;
+            if (mySpotIdx >= 0) occupiedGameSpots.delete(mySpotIdx);
+            target.gameSpotIdx = -1;
+            if (ud.legLPivot) ud.legLPivot.rotation.x = 0;
+            if (ud.legRPivot) ud.legRPivot.rotation.x = 0;
+            if (ud.armLPivot) { ud.armLPivot.rotation.x = 0; ud.armLPivot.rotation.z = 0; }
+            if (ud.armRPivot) { ud.armRPivot.rotation.x = 0; ud.armRPivot.rotation.z = 0; }
+            mesh.position.x = 15 + (Math.random() - 0.5) * 4;
+            mesh.position.z = 0 + (Math.random() - 0.5) * 2;
+            const valid = pickValidTarget();
+            target.x = valid.x;
+            target.z = valid.z;
+            target.timer = Math.random() * 10 + 5;
+
+            // Find and stop partner
+            Object.entries(agentTargetsRef.current).forEach(([otherId, otherTarget]) => {
+              if (otherId === id) return;
+              if (otherTarget.playing || otherTarget.goToGame) {
+                const otherSpot = allGameSpots[otherTarget.gameSpotIdx];
+                if (otherSpot && otherSpot.game === gameType) {
+                  const otherMesh = agentMeshesRef.current[otherId];
+                  otherTarget.playing = false;
+                  otherTarget.goToGame = false;
+                  if (otherTarget.gameSpotIdx >= 0) occupiedGameSpots.delete(otherTarget.gameSpotIdx);
+                  otherTarget.gameSpotIdx = -1;
+                  otherTarget.playTimer = 0;
+                  if (otherMesh) {
+                    const oud = otherMesh.userData;
+                    if (oud.legLPivot) oud.legLPivot.rotation.x = 0;
+                    if (oud.legRPivot) oud.legRPivot.rotation.x = 0;
+                    if (oud.armLPivot) { oud.armLPivot.rotation.x = 0; oud.armLPivot.rotation.z = 0; }
+                    if (oud.armRPivot) { oud.armRPivot.rotation.x = 0; oud.armRPivot.rotation.z = 0; }
+                    otherMesh.position.x = 15 + (Math.random() - 0.5) * 4;
+                    otherMesh.position.z = 0 + (Math.random() - 0.5) * 2;
+                    otherMesh.position.y = 0;
+                  }
+                  const v = pickValidTarget();
+                  otherTarget.x = v.x;
+                  otherTarget.z = v.z;
+                  otherTarget.timer = Math.random() * 5 + 3;
+                }
+              }
+            });
+          }
+          const ring = ud.ring;
+          if (ring) ring.material.opacity = 0.3 + Math.sin(Date.now() * 0.003) * 0.2;
+          return;
+        }
+
+        // === GOING TO GAME ===
+        if (target.goToGame) {
+          const spot = allGameSpots[target.gameSpotIdx];
+          if (spot) {
+            const dx = spot.x - mesh.position.x;
+            const dz = spot.z - mesh.position.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < 0.3) {
+              target.playing = true;
+              target.goToGame = false;
+              return;
+            }
+            const speed = 1.2 * dt;
+            mesh.position.x += (dx / dist) * speed;
+            mesh.position.z += (dz / dist) * speed;
+            mesh.rotation.y = Math.atan2(dx, dz);
+            ud.walkPhase = (ud.walkPhase || 0) + dt * 8;
+            const swing = Math.sin(ud.walkPhase) * 0.6;
+            if (ud.legLPivot) ud.legLPivot.rotation.x = swing;
+            if (ud.legRPivot) ud.legRPivot.rotation.x = -swing;
+            if (ud.armLPivot) { ud.armLPivot.rotation.x = -swing * 0.7; ud.armLPivot.rotation.z = 0; }
+            if (ud.armRPivot) { ud.armRPivot.rotation.x = swing * 0.7; ud.armRPivot.rotation.z = 0; }
+            mesh.position.y = 0;
+          }
+          const ring = ud.ring;
+          if (ring) ring.material.opacity = 0.3 + Math.sin(Date.now() * 0.003) * 0.2;
+          return;
+        }
+
+        // === NORMAL WALKING ===
         target.timer -= dt;
         if (target.timer <= 0) {
-          const valid = pickValidTarget();
-          target.x = valid.x;
-          target.z = valid.z;
-          target.timer = Math.random() * 5 + 3;
+          const roll = Math.random();
+          if (roll < 0.30) {
+            // 30% — go sit at desk
+            target.goToDesk = true;
+            target.commanded = false;
+            target.sitTimer = Math.random() * 30 + 30;
+            target.timer = 999;
+          } else if (roll < 0.45) {
+            // 15% — go sit on a sofa
+            const available = [];
+            sofaSeats.forEach((s, idx) => {
+              if (!occupiedSofaSeats.has(idx)) available.push(idx);
+            });
+            if (available.length > 0) {
+              const seatIdx = available[Math.floor(Math.random() * available.length)];
+              target.goToSofa = true;
+              target.sofaSeatIdx = seatIdx;
+              target.sofaSitTimer = Math.random() * 30 + 30;
+              occupiedSofaSeats.add(seatIdx);
+              target.timer = 999;
+            } else {
+              const valid = pickValidTarget();
+              target.x = valid.x;
+              target.z = valid.z;
+              target.timer = Math.random() * 10 + 5;
+            }
+          } else if (roll < 0.65) {
+            // 20% — invite another agent to play a game
+            // Find a game with both spots free
+            const games = [
+              { spots: [0, 1], name: "pingpong" },  // ping pong spots 0,1
+              { spots: [2, 3], name: "billiards" },  // billiard spots 2,3
+            ];
+            const availableGames = games.filter(g => g.spots.every(idx => !occupiedGameSpots.has(idx)));
+            // Find another free agent (not sitting, not playing, not going anywhere)
+            const freeAgents = Object.entries(agentTargetsRef.current).filter(([otherId, ot]) => {
+              return otherId !== id && !ot.sitting && !ot.goToDesk && !ot.sofaSitting && !ot.goToSofa && !ot.playing && !ot.goToGame;
+            });
+
+            if (availableGames.length > 0 && freeAgents.length > 0) {
+              const game = availableGames[Math.floor(Math.random() * availableGames.length)];
+              const [partnerId, partnerTarget] = freeAgents[Math.floor(Math.random() * freeAgents.length)];
+              const playTime = Math.random() * 30 + 30;
+
+              // Send this agent to spot 0
+              target.goToGame = true;
+              target.gameSpotIdx = game.spots[0];
+              target.playTimer = playTime;
+              target.playPhase = 0;
+              occupiedGameSpots.add(game.spots[0]);
+              target.timer = 999;
+
+              // Send partner to spot 1
+              partnerTarget.goToGame = true;
+              partnerTarget.gameSpotIdx = game.spots[1];
+              partnerTarget.playTimer = playTime;
+              partnerTarget.playPhase = Math.PI; // offset animation phase
+              occupiedGameSpots.add(game.spots[1]);
+              partnerTarget.timer = 999;
+            } else {
+              const valid = pickValidTarget();
+              target.x = valid.x;
+              target.z = valid.z;
+              target.timer = Math.random() * 10 + 5;
+            }
+          } else {
+            // 45% — keep walking
+            const valid = pickValidTarget();
+            target.x = valid.x;
+            target.z = valid.z;
+            target.timer = Math.random() * 10 + 5;
+          }
         }
         const dx = target.x - mesh.position.x;
         const dz = target.z - mesh.position.z;
@@ -669,6 +1533,57 @@ export default function ClawHQ() {
         }
       });
 
+      // Update agent screens
+      const elapsed = clock.elapsedTime;
+      AGENTS.forEach(a => updateScreen(a.id, elapsed));
+
+      // Update wall trading charts
+      updateWallScreens(elapsed);
+
+      // Animate game balls — only when both players are at the table
+      let ppPlayingCount = 0;
+      let bilPlayingCount = 0;
+      Object.values(agentTargetsRef.current).forEach(t => {
+        if (t.playing && t.gameSpotIdx >= 0) {
+          const spot = allGameSpots[t.gameSpotIdx];
+          if (spot?.game === "pingpong") ppPlayingCount++;
+          if (spot?.game === "billiards") bilPlayingCount++;
+        }
+      });
+      const ppActive = ppPlayingCount >= 2;
+      const bilActive = bilPlayingCount >= 2;
+
+      // Ping pong ball — bounces back and forth across the table
+      ppBall.visible = ppActive;
+      if (ppActive) {
+        const t = elapsed * 3;
+        ppBall.position.x = 15 + Math.sin(t) * 1.0; // side to side
+        ppBall.position.z = 3 + Math.sin(t * 1.7) * 0.3; // slight drift
+        ppBall.position.y = 0.9 + Math.abs(Math.sin(t * 2)) * 0.3; // bouncing arc
+      }
+
+      // Billiard balls — slow rolling movement when playing
+      billiardBalls.forEach((ball, i) => {
+        ball.visible = bilActive;
+        if (bilActive) {
+          const t = elapsed * 0.4 + i * 2;
+          const phase = Math.sin(t);
+          // Balls slowly drift and settle
+          if (i === billiardBalls.length - 1) {
+            // Cue ball — moves more dramatically
+            ball.position.x = ball.userData.baseX + Math.sin(elapsed * 0.8) * 0.4;
+            ball.position.z = ball.userData.baseZ + Math.cos(elapsed * 0.6) * 0.3;
+          } else {
+            // Other balls — gentle rolling
+            ball.position.x = ball.userData.baseX + Math.sin(t) * 0.15;
+            ball.position.z = ball.userData.baseZ + Math.cos(t * 0.7) * 0.1;
+          }
+          ball.position.y = 0.9;
+          ball.rotation.x += dt * (i + 1) * 0.5;
+          ball.rotation.z += dt * (i + 1) * 0.3;
+        }
+      });
+
       renderer.render(scene, camera);
     }
 
@@ -716,6 +1631,19 @@ export default function ClawHQ() {
       );
       const raycaster = new THREE.Raycaster();
       raycaster.setFromCamera(mouse, camera);
+
+      // Check monitor clicks first
+      const allMonitorMeshes = [];
+      Object.entries(monitorMeshes).forEach(([agentId, meshes]) => {
+        meshes.forEach(m => allMonitorMeshes.push(m));
+      });
+      const monitorHits = raycaster.intersectObjects(allMonitorMeshes, false);
+      if (monitorHits.length > 0 && monitorHits[0].object.userData.agentId) {
+        setMonitorModal(monitorHits[0].object.userData.agentId);
+        return;
+      }
+
+      // Then check agent clicks
       let closest = null, closestDist = Infinity;
       AGENTS.forEach(a => {
         const mesh = agentMeshesRef.current[a.id];
@@ -727,18 +1655,15 @@ export default function ClawHQ() {
         }
       });
       if (closest) {
-        // Toggle follow: click same agent to unfollow, different to switch
         if (followAgentRef.current === closest.id) {
           followAgentRef.current = null;
           setSelectedAgent(null);
         } else {
           followAgentRef.current = closest.id;
           setSelectedAgent(closest.id);
-          // Zoom in closer for follow mode
           cameraStateRef.current.distance = 3;
         }
       } else {
-        // Clicked empty space — unfollow
         followAgentRef.current = null;
         setSelectedAgent(null);
       }
@@ -854,15 +1779,162 @@ export default function ClawHQ() {
       ...prev,
       [chatAgent]: [...(prev[chatAgent] || []), { from: "You", text: msg, time: timeStr() }]
     }));
-    // Simulated agent response
+
     const agent = AGENTS.find(a => a.id === chatAgent);
-    setTimeout(() => {
-      const resp = CHAT_RESPONSES[Math.floor(Math.random() * CHAT_RESPONSES.length)];
-      setChatHistories(prev => ({
-        ...prev,
-        [chatAgent]: [...(prev[chatAgent] || []), { from: agent?.name || "Agent", text: resp, time: timeStr() }]
-      }));
-    }, 800 + Math.random() * 1500);
+    const lower = msg.toLowerCase();
+
+    // Helper to reset agent from any current activity
+    function resetAgent(agentId) {
+      const t = agentTargetsRef.current[agentId];
+      const m = agentMeshesRef.current[agentId];
+      if (!t) return;
+      // Free sofa seat
+      if (t.sofaSeatIdx >= 0) { /* occupiedSofaSeats managed in useEffect scope */ }
+      // Free game spot
+      if (t.gameSpotIdx >= 0) { /* occupiedGameSpots managed in useEffect scope */ }
+      t.sitting = false; t.goToDesk = false; t.commanded = false;
+      t.sofaSitting = false; t.goToSofa = false; t.sofaSeatIdx = -1;
+      t.playing = false; t.goToGame = false; t.gameSpotIdx = -1; t.playTimer = 0;
+      if (m) {
+        m.position.y = 0;
+        const ud = m.userData;
+        if (ud.legLPivot) ud.legLPivot.rotation.x = 0;
+        if (ud.legRPivot) ud.legRPivot.rotation.x = 0;
+        if (ud.armLPivot) { ud.armLPivot.rotation.x = 0; ud.armLPivot.rotation.z = 0; }
+        if (ud.armRPivot) { ud.armRPivot.rotation.x = 0; ud.armRPivot.rotation.z = 0; }
+      }
+    }
+
+    // Detect commands
+    const sitKeywords = ["go to desk", "go to your desk", "work", "start working", "go work"];
+    const standKeywords = ["stand", "stand up", "get up", "walk", "go walk", "stop", "leave", "move around"];
+    const sofaKeywords = ["sofa", "couch", "relax", "chill", "take a break", "rest", "lounge"];
+    const pingpongKeywords = ["ping pong", "pingpong", "table tennis", "play ping"];
+    const billiardKeywords = ["billiard", "pool", "play pool", "shoot pool", "play billiard"];
+
+    const isSitCommand = sitKeywords.some(k => lower.includes(k));
+    const isStandCommand = standKeywords.some(k => lower.includes(k));
+    const isSofaCommand = sofaKeywords.some(k => lower.includes(k));
+    const isPingPongCommand = pingpongKeywords.some(k => lower.includes(k));
+    const isBilliardCommand = billiardKeywords.some(k => lower.includes(k));
+
+    if (isSitCommand) {
+      // Send agent to their desk (commanded — won't auto-stand)
+      resetAgent(chatAgent);
+      const target = agentTargetsRef.current[chatAgent];
+      if (target) {
+        target.goToDesk = true;
+        target.commanded = true;
+      }
+      setTimeout(() => {
+        setChatHistories(prev => ({
+          ...prev,
+          [chatAgent]: [...(prev[chatAgent] || []), { from: agent?.name || "Agent", text: "Copy that. Heading to my desk now.", time: timeStr() }]
+        }));
+      }, 600);
+    } else if (isSofaCommand) {
+      // Send agent to sofa
+      resetAgent(chatAgent);
+      const target = agentTargetsRef.current[chatAgent];
+      if (target) {
+        // Find a free sofa seat — try from sofaSeatsRef or just set goToSofa
+        target.goToSofa = true;
+        target.sofaSeatIdx = -1; // will be assigned in movement loop
+        // Find any free seat
+        for (let i = 0; i < 8; i++) {
+          target.sofaSeatIdx = i;
+          break;
+        }
+        target.sofaSitTimer = 999; // commanded — stay until told otherwise
+        target.commanded = true;
+        target.timer = 999;
+      }
+      setTimeout(() => {
+        setChatHistories(prev => ({
+          ...prev,
+          [chatAgent]: [...(prev[chatAgent] || []), { from: agent?.name || "Agent", text: "Sure thing. Going to relax on the sofa.", time: timeStr() }]
+        }));
+      }, 600);
+    } else if (isPingPongCommand || isBilliardCommand) {
+      // Send agent to play — find a partner
+      const gameName = isPingPongCommand ? "pingpong" : "billiards";
+      const gameLabel = isPingPongCommand ? "ping pong" : "pool";
+
+      // Find a free partner
+      const freeAgents = Object.entries(agentTargetsRef.current).filter(([otherId, ot]) => {
+        return otherId !== chatAgent && !ot.sitting && !ot.goToDesk && !ot.sofaSitting && !ot.goToSofa && !ot.playing && !ot.goToGame;
+      });
+
+      // Get the right spots (0,1 for pingpong, 2,3 for billiards)
+      const spotOffset = isPingPongCommand ? 0 : 2;
+
+      if (freeAgents.length > 0) {
+        const [partnerId, partnerTarget] = freeAgents[Math.floor(Math.random() * freeAgents.length)];
+        const partnerAgent = AGENTS.find(a => a.id === partnerId);
+        const playTime = Math.random() * 30 + 30;
+
+        resetAgent(chatAgent);
+        resetAgent(partnerId);
+
+        const target = agentTargetsRef.current[chatAgent];
+        target.goToGame = true;
+        target.gameSpotIdx = spotOffset;
+        target.playTimer = playTime;
+        target.playPhase = 0;
+        target.timer = 999;
+
+        partnerTarget.goToGame = true;
+        partnerTarget.gameSpotIdx = spotOffset + 1;
+        partnerTarget.playTimer = playTime;
+        partnerTarget.playPhase = Math.PI;
+        partnerTarget.timer = 999;
+
+        setTimeout(() => {
+          setChatHistories(prev => ({
+            ...prev,
+            [chatAgent]: [...(prev[chatAgent] || []), { from: agent?.name || "Agent", text: `Let's go! Invited ${partnerAgent?.name || "someone"} for a game of ${gameLabel}.`, time: timeStr() }]
+          }));
+        }, 600);
+      } else {
+        setTimeout(() => {
+          setChatHistories(prev => ({
+            ...prev,
+            [chatAgent]: [...(prev[chatAgent] || []), { from: agent?.name || "Agent", text: `I'd love to play ${gameLabel}, but everyone's busy right now.`, time: timeStr() }]
+          }));
+        }, 600);
+      }
+    } else if (isStandCommand) {
+      // Make agent stop whatever and walk
+      resetAgent(chatAgent);
+      const target = agentTargetsRef.current[chatAgent];
+      if (target) {
+        target.timer = Math.random() * 10 + 5;
+        const mesh = agentMeshesRef.current[chatAgent];
+        if (mesh) {
+          // Move to open area
+          mesh.position.x = 2 + (Math.random() - 0.5) * 4;
+          mesh.position.z = (Math.random() - 0.5) * 4;
+          mesh.position.y = 0;
+          target.x = mesh.position.x + (Math.random() - 0.5) * 3;
+          target.z = mesh.position.z + (Math.random() - 0.5) * 3;
+        }
+      }
+      setTimeout(() => {
+        setChatHistories(prev => ({
+          ...prev,
+          [chatAgent]: [...(prev[chatAgent] || []), { from: agent?.name || "Agent", text: "Roger. Getting up and moving around.", time: timeStr() }]
+        }));
+      }, 600);
+    } else {
+      // Normal chat response
+      setTimeout(() => {
+        const resp = CHAT_RESPONSES[Math.floor(Math.random() * CHAT_RESPONSES.length)];
+        setChatHistories(prev => ({
+          ...prev,
+          [chatAgent]: [...(prev[chatAgent] || []), { from: agent?.name || "Agent", text: resp, time: timeStr() }]
+        }));
+      }, 800 + Math.random() * 1500);
+    }
   }, [chatInput, chatAgent]);
 
 
@@ -983,14 +2055,23 @@ export default function ClawHQ() {
           </svg>
         </div>
         {/* Volume/mute icon */}
-        <div style={{
+        <div onClick={toggleMusic} style={{
           width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center",
-          borderRadius: 8, border: "1px solid #3a3530", cursor: "pointer"
+          borderRadius: 8, border: `1px solid ${musicPlaying ? "#c8a050" : "#3a3530"}`, cursor: "pointer",
+          background: musicPlaying ? "rgba(200,160,80,0.08)" : "transparent"
         }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6a6055" strokeWidth="1.8">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-          </svg>
+          {musicPlaying ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c8a050" strokeWidth="1.8">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6a6055" strokeWidth="1.8">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+            </svg>
+          )}
         </div>
       </div>
 
@@ -1318,6 +2399,171 @@ export default function ClawHQ() {
           </div>
         </div>
       </div>
+
+      {/* MONITOR MODAL */}
+      {monitorModal && (() => {
+        const agent = AGENTS.find(a => a.id === monitorModal);
+        if (!agent) return null;
+        const msgs = {
+          alpha: ["Scanning Jupiter routes...", "SOL/USDC spread: 0.02%", "Executing swap: 2 SOL → USDC", "TX confirmed: 5xK7m...9pQ2", "P&L today: +0.34 SOL", "Checking orderbook depth...", "Route: SOL→USDC via Raydium", "Slippage: 0.1%", "Balance: 12.4 SOL"],
+          bravo: ["Analyzing yield farms...", "APY comparison: Marinade 7.2%", "Rebalancing portfolio...", "Moving 30% to stables", "Risk score: LOW", "DeFi TVL: $4.2B", "Staking rewards claimed", "New farm detected: mSOL/USDC"],
+          cipher: ["Querying on-chain data...", "Parsing 1,247 transactions", "Anomaly detected: wallet 0x8f..", "Generating report...", "Clustering whale wallets...", "Data pipeline: HEALTHY", "Top holder moved 500K USDC", "Network TPS: 3,847"],
+          delta: ["Scanning NFT floors...", "Tensor: Mad Lads 12.4 SOL", "New collection: Claynosaurz", "Rarity analysis complete", "Listing snipe ready", "Watching 3 collections", "Floor change: -0.3 SOL", "Volume 24h: 2,100 SOL"],
+          echo: ["TX queue: 3 pending", "Sending 0.5 SOL → 7xQ...", "Confirmed in 412ms", "Priority fee: 0.000005 SOL", "Batch TX: 5/5 complete", "Nonce account updated", "Compute units: 200,000", "Retry count: 0"],
+          flux: ["Market feed active", "SOL: $168.42 (+2.1%)", "Volume spike detected: RAY", "Alert: BTC dominance ↓ 52%", "Monitoring 47 pairs", "Sentiment analysis: BULLISH", "Funding rate: +0.01%", "Open interest: $2.1B"],
+        };
+        const agentMsgs = msgs[monitorModal] || ["..."];
+        return (
+          <div onClick={() => setMonitorModal(null)} style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)",
+            display: "flex", alignItems: "center", justifyContent: "center"
+          }}>
+            <div onClick={e => e.stopPropagation()} style={{
+              width: 560, height: 420, background: "#0a0f0a",
+              border: `2px solid ${hexToCSS(agent.color)}40`,
+              borderRadius: 16, overflow: "hidden", boxShadow: `0 0 40px ${hexToCSS(agent.color)}20`,
+              display: "flex", flexDirection: "column", fontFamily: "'Courier New', monospace"
+            }}>
+              {/* Modal header */}
+              <div style={{
+                padding: "14px 20px", display: "flex", alignItems: "center", gap: 12,
+                background: `${hexToCSS(agent.color)}15`, borderBottom: `1px solid ${hexToCSS(agent.color)}30`
+              }}>
+                <div style={{
+                  width: 36, height: 36, borderRadius: "50%", background: hexToCSS(agent.color),
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 16, fontWeight: 700, color: "#0a0a0f"
+                }}>{agent.name[0]}</div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#e0e0e8" }}>{agent.name}</div>
+                  <div style={{ fontSize: 10, color: "#6a6055" }}>{agent.role}</div>
+                </div>
+                <div style={{ flex: 1 }} />
+                {(() => {
+                  const target = agentTargetsRef.current[monitorModal];
+                  const isAtDesk = target && target.sitting;
+                  return (
+                    <div style={{
+                      padding: "4px 10px", borderRadius: 6, fontSize: 9, fontWeight: 600,
+                      background: isAtDesk ? "rgba(20,241,149,0.15)" : "rgba(255,170,34,0.15)",
+                      color: isAtDesk ? "#14f195" : "#ffaa22",
+                      letterSpacing: 1
+                    }}>{isAtDesk ? "RUNNING" : "IDLE"}</div>
+                  );
+                })()}
+                <div onClick={() => setMonitorModal(null)} style={{
+                  width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                  borderRadius: 6, cursor: "pointer", color: "#6a6055", fontSize: 18, border: "1px solid #2a2520"
+                }}>×</div>
+              </div>
+
+              {/* Live terminal */}
+              <MonitorTerminal agentId={monitorModal} agent={agent} messages={agentMsgs} agents={agents} agentTargets={agentTargetsRef} />
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// Live terminal component for monitor modal
+function MonitorTerminal({ agentId, agent, messages, agents, agentTargets }) {
+  const [lines, setLines] = useState([]);
+  const bottomRef = useRef(null);
+  const [isAtDesk, setIsAtDesk] = useState(false);
+
+  // Check sitting state every 500ms
+  useEffect(() => {
+    const check = setInterval(() => {
+      const target = agentTargets?.current?.[agentId];
+      setIsAtDesk(target?.sitting || false);
+    }, 500);
+    return () => clearInterval(check);
+  }, [agentId, agentTargets]);
+
+  // Only add terminal lines when agent is at desk
+  useEffect(() => {
+    if (!isAtDesk) return;
+    // Boot message when agent sits down
+    if (lines.length === 0) {
+      setLines([
+        { text: `[${agent.name.toUpperCase()}] Terminal initialized`, type: "system" },
+        { text: `Connected to solana-mainnet-beta`, type: "system" },
+        { text: `Agent status: ONLINE`, type: "system" },
+        { text: `---`, type: "divider" },
+      ]);
+    }
+    const interval = setInterval(() => {
+      const msg = messages[Math.floor(Math.random() * messages.length)];
+      const now = new Date();
+      const ts = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}:${now.getSeconds().toString().padStart(2, "0")}`;
+      const types = ["output", "output", "output", "success", "info", "warning"];
+      const type = types[Math.floor(Math.random() * types.length)];
+      setLines(prev => [...prev.slice(-40), { text: msg, type, ts }]);
+    }, 1500 + Math.random() * 2000);
+    return () => clearInterval(interval);
+  }, [isAtDesk, messages, agent.name]);
+
+  // Clear lines when agent leaves desk
+  useEffect(() => {
+    if (!isAtDesk) {
+      setLines([]);
+    }
+  }, [isAtDesk]);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [lines]);
+
+  const colors = {
+    system: "#6a6055",
+    output: "#14f195",
+    success: "#14f195",
+    info: "#00d1ff",
+    warning: "#ffaa22",
+    divider: "#2a2520",
+  };
+
+  if (!isAtDesk) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#050805", padding: 40 }}>
+        <div style={{ fontSize: 40, marginBottom: 16, opacity: 0.3 }}>💤</div>
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#4a4540", marginBottom: 8, fontFamily: "'Courier New', monospace" }}>Screen Idle</div>
+        <div style={{ fontSize: 11, color: "#333330", textAlign: "center", lineHeight: 1.6, fontFamily: "'Courier New', monospace" }}>
+          {agent.name} is not at their desk.<br />
+          Terminal will activate when the agent returns.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "12px 20px", background: "#060a06" }}>
+      {lines.map((line, i) => (
+        <div key={i} style={{
+          display: "flex", gap: 10, marginBottom: 4,
+          fontFamily: "'Courier New', monospace", fontSize: 12, lineHeight: 1.6
+        }}>
+          {line.ts && <span style={{ color: "#3a3530", flexShrink: 0 }}>{line.ts}</span>}
+          {line.type === "divider" ? (
+            <span style={{ color: "#2a2520" }}>{"─".repeat(40)}</span>
+          ) : (
+            <span style={{ color: colors[line.type] || "#14f195" }}>
+              <span style={{ color: "#4a4540", marginRight: 6 }}>{">"}</span>
+              {line.text}
+            </span>
+          )}
+        </div>
+      ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+        <span style={{ color: "#4a4540", fontFamily: "'Courier New', monospace", fontSize: 12 }}>{">"}</span>
+        <span style={{
+          width: 8, height: 14, background: "#14f195",
+          animation: "blink 1s step-end infinite", display: "inline-block"
+        }} />
+        <style>{`@keyframes blink { 50% { opacity: 0; } }`}</style>
+      </div>
+      <div ref={bottomRef} />
     </div>
   );
 }

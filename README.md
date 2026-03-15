@@ -1,132 +1,90 @@
-# 0xMerl HQ — AI Agent Command Center
+# 0xMerl HQ 🏢
 
-A 3D isometric virtual headquarters for managing autonomous AI agents. Built with React + Three.js.
+A 3D isometric AI agent headquarters built with React + Three.js. Watch autonomous AI agents work, play, and interact in a fully interactive office environment.
 
-![0xMerl HQ](https://img.shields.io/badge/status-alpha-c8a050?style=flat-square) ![Three.js](https://img.shields.io/badge/Three.js-r160-black?style=flat-square) ![React](https://img.shields.io/badge/React-18-61dafb?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
+![0xMerl HQ](https://img.shields.io/badge/Built%20with-Three.js-black?style=flat&logo=threedotjs)
+![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react)
+![Solana](https://img.shields.io/badge/Solana-Native-14f195?style=flat)
 
-## Overview
+## Features
 
-0xMerl HQ is an interactive 3D office environment where AI agents walk around, execute tasks, and can be monitored in real-time. Think of it as a visual command center for your autonomous agent swarm.
+### 🏗️ Two-Room Office
+- **Main HQ** — 6 desks with live terminal monitors, meeting table, lounge area with couches, server racks
+- **Sports Room** — Pool/billiard table and ping pong table with animated balls
 
-### Features
+### 🤖 6 Autonomous AI Agents
+| Agent | Role | Color |
+|-------|------|-------|
+| Alpha | Trader | Green |
+| Bravo | DeFi Strategist | Purple |
+| Charlie | Data Analyst | Cyan |
+| Delta | NFT Scout | Red |
+| Echo | Tx Executor | Orange |
+| Foxtrot | Market Monitor | Pink |
 
-**3D Office**
-- Isometric Three.js office with desks, monitors, meeting table, couches, ping pong table, server racks, and plants
-- Beige floor with gray walls, glowing monitor screens, and LED server indicators
+### 🎮 Agent Behaviors
+Agents autonomously cycle between activities:
+- **Working at desk** — sit with live terminal showing role-specific output
+- **Relaxing on sofa** — chill in the lounge area
+- **Playing ping pong** — invite a partner, animated paddle swings
+- **Playing billiards** — invite a partner, cue aiming animation
+- **Walking around** — navigate between rooms through doorway
 
-**6 AI Agents**
-- Voxel-style characters with full faces (eyes, eyebrows, nose, mouth), unique hairstyles, and colored uniforms
-- Walk animations with limb swinging, idle breathing, and collision avoidance
-- Agents navigate around furniture and each other with AABB collision detection
+### 💬 Chat Commands
+Click an agent's chat to command them:
+- `"go to desk"` / `"work"` — send to their workstation
+- `"relax"` / `"sofa"` / `"chill"` — send to couch
+- `"play ping pong"` — invite a partner for table tennis
+- `"play pool"` / `"billiards"` — invite a partner for billiards
+- `"stand up"` / `"stop"` — interrupt any activity
 
-**Camera Controls**
-- Left-drag: Pan the view
-- Right-drag: Rotate horizontally + vertically
-- Scroll: Zoom in/out (range 3–50)
-- Click agent: Follow with smooth camera tracking
-- Camera preset buttons (reset, front, isometric)
+### 📊 Live Displays
+- **Desk monitors** — per-agent terminal output (active only when agent is seated)
+- **Wall screens** — live animated trading charts (candlestick, line, volume)
+- **Monitor modal** — click any desk screen to see full-size terminal view
 
-**UI Panels**
-- **OPEN HQ** — Headquarters panel with Inbox, History, and Playbooks tabs. Monitor agent outputs, view run history, and launch reusable workflow templates
-- **CHAT** — Per-agent chat interface with conversation history, model selector (GPT-4.1 mini, GPT-4o, Claude Sonnet, Llama 3, DeepSeek), and new session reset
-- **MARKETPLACE** — Coming soon
-- **ANALYTICS** — Coming soon
+### 🎵 Ambient Music
+Procedurally generated lo-fi beats with Tone.js (toggle with volume button)
 
-**UI Elements**
-- Top bar: "0xMerl HEADQUARTERS" with agent roster chips
-- Bottom-left: Connection status, working/idle counts, controls hint
-- Bottom-right: Floating CHAT button
-- Top-left: Camera angle controls
-- Top-right: Book, edit, volume icons
-- Right edge: Vertical tab buttons with slide-out panels
+### 📷 Camera Controls
+- **Left-drag** — pan
+- **Right-drag** — rotate + pitch
+- **Scroll** — zoom
+- **Click agent** — follow mode (zoom in)
 
 ## Getting Started
 
-### Prerequisites
-
-- Node.js 18+
-- npm or yarn
-
-### Installation
-
 ```bash
-git clone https://github.com/0xMer199/0xmerl-hq.git
-cd 0xmerl-hq
+# Install dependencies
 npm install
-```
 
-### Development
-
-```bash
+# Run dev server
 npm run dev
-```
 
-Opens at `http://localhost:3000`
-
-### Build
-
-```bash
+# Build for production
 npm run build
 ```
 
-Output goes to `dist/`
-
-## Project Structure
-
-```
-0xmerl-hq/
-├── index.html              # Entry HTML
-├── package.json            # Dependencies & scripts
-├── vite.config.js          # Vite configuration
-├── LICENSE                 # MIT License
-├── .gitignore
-├── public/                 # Static assets
-└── src/
-    ├── main.jsx            # React entry point
-    ├── components/
-    │   └── ClawHQ.jsx      # Main HQ component (3D scene + UI)
-    ├── data/               # Agent configs, templates (future)
-    └── utils/              # Helpers, collision, camera (future)
-```
-
 ## Tech Stack
+- **React 18** — UI components and state
+- **Three.js** — 3D rendering, voxel agents, isometric camera
+- **Tone.js** — procedural ambient music
+- **Vite** — build tooling
 
-- **React 18** — UI framework
-- **Three.js** — 3D rendering engine
-- **Vite** — Build tool & dev server
+## Architecture
+```
+src/
+  main.jsx          — Entry point
+  components/
+    ClawHQ.jsx      — Main component (scene, agents, UI, logic)
+```
 
-## Roadmap
-
-- [ ] Wire up real OpenClaw/ElizaOS agent backends
-- [ ] Solana RPC integration for live wallet balances & tx execution
-- [ ] WebSocket backend for real-time agent state
-- [ ] Agent sitting animations (desk + meeting chairs)
-- [ ] L-shaped office layout with separate meeting room
-- [ ] Marketplace panel — browse and install agent skills
-- [ ] Analytics panel — charts, metrics, performance dashboards
-- [ ] Day/night cycle lighting
-- [ ] Particle effects on task completion
-- [ ] Sound effects and ambient office audio
-
-## Agents
-
-| Name     | Role             | Color   |
-|----------|------------------|---------|
-| Alpha    | Trader           | 🟢 Green  |
-| Bravo    | DeFi Strategist  | 🟣 Purple |
-| Charlie  | Data Analyst     | 🔵 Cyan   |
-| Delta    | NFT Scout        | 🔴 Red    |
-| Echo     | Tx Executor      | 🟡 Orange |
-| Foxtrot  | Market Monitor   | 🩷 Pink   |
-
-## Contributing
-
-Pull requests welcome. For major changes, open an issue first.
+## Inspired By
+[Luke The Dev's OpenClaw Office](https://x.com/iamlukethedev)
 
 ## License
-
-[MIT](LICENSE)
+MIT
 
 ---
 
-Built by [@solgoodmanx\_](https://x.com/solgoodmanx_) | [GitHub](https://github.com/0xMer199)
+Built by [@solgoodmanx_](https://x.com/solgoodmanx_) | [0xMer199](https://github.com/0xMer199)
