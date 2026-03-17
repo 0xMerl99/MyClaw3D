@@ -33,7 +33,7 @@ Command support depends on the current chat parser in `src/components/ClawHQ.jsx
 - relax / sofa / chill
 - cafeteria / cafe / coffee / snack / lunch
 - gym / workout / exercise
-- treadmill / elliptical / bike / chest press / bench press / squat rack / punching bag / kettlebell / dumbbell / barbell / trampoline
+- treadmill / elliptical / bike / chest press / punching bag / kettlebell / dumbbell / barbell
 - play ping pong
 - play pool / billiards
 - stand up / stop

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import * as Tone from "tone";
 
@@ -96,6 +96,20 @@ export default function ClawHQ() {
   const [chatAgent, setChatAgent] = useState("alpha");
   const [hqPanelOpen, setHqPanelOpen] = useState(false);
   const [hqTab, setHqTab] = useState("playbooks");
+  const [chatModelByAgent, setChatModelByAgent] = useState({});
+  const [chatShowToolsByAgent, setChatShowToolsByAgent] = useState({});
+  const [settingsFocusAgent, setSettingsFocusAgent] = useState(null);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [marketTab, setMarketTab] = useState("browse"); // browse | importexport
+  const [marketImportText, setMarketImportText] = useState("");
+  const [marketMsg, setMarketMsg] = useState("");
+  const [marketToolOutput, setMarketToolOutput] = useState("");
+  const [marketToolBusy, setMarketToolBusy] = useState(false);
+  const [analyticsLimit, setAnalyticsLimit] = useState(300);
+  const [analyticsAgent, setAnalyticsAgent] = useState("all");
+  const [analyticsType, setAnalyticsType] = useState("all");
+  const [analyticsErrorsOnly, setAnalyticsErrorsOnly] = useState(false);
   const [monitorModal, setMonitorModal] = useState(null);
   const [mapOpen, setMapOpen] = useState(false);
   const [docsOpen, setDocsOpen] = useState(false);
@@ -111,6 +125,7 @@ export default function ClawHQ() {
   const [reports, setReports] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
   const [obsEvents, setObsEvents] = useState([]);
+  const [archivedEvents, setArchivedEvents] = useState([]);
   const [obsStatsByAgent, setObsStatsByAgent] = useState(() => {
     const s = {};
     AGENTS.forEach(a => {
@@ -128,6 +143,9 @@ export default function ClawHQ() {
     AGENTS.forEach(a => { m[a.id] = {}; });
     return m;
   })());
+  const anyRightSlideoutOpen = hqPanelOpen || marketplaceOpen || analyticsOpen;
+  const anyPanelOverlayOpen = anyRightSlideoutOpen || chatPanelOpen;
+  const settingsAgentRowRef = useRef({});
   const lastActivityFlagsRef = useRef((() => {
     const m = {};
     AGENTS.forEach(a => { m[a.id] = { gyming: false, cafe: false, playing: false }; });
@@ -167,6 +185,279 @@ export default function ClawHQ() {
     if (s.length > maxLen) s = s.slice(0, maxLen) + "\n…";
     return s;
   }, []);
+
+  const pct = useCallback((rows, p) => {
+    const vals = rows.map(r => Number(r)).filter(n => Number.isFinite(n)).sort((a, b) => a - b);
+    if (!vals.length) return null;
+    const idx = Math.max(0, Math.min(vals.length - 1, Math.ceil((p / 100) * vals.length) - 1));
+    return vals[idx];
+  }, []);
+
+  const curatedPlaybooks = useMemo(() => ([
+    {
+      title: "Morning standup (per agent)",
+      desc: "Each agent posts a concise standup-style update to the inbox.",
+      color: "#14f195",
+      intervalMs: 6 * 60 * 60 * 1000,
+      agentId: "random",
+      taskText: "Post a 5-bullet standup update: what you did, what you'll do, blockers, risks, and next actions. Keep it tight.",
+      enabled: true,
+    },
+    {
+      title: "Error triage (observe feed)",
+      desc: "Review recent errors and propose fixes + next checks.",
+      color: "#ffaa22",
+      intervalMs: 30 * 60 * 1000,
+      agentId: "random",
+      taskText: "Review the latest error events. Summarize root causes, propose fixes, and suggest what to verify next.",
+      enabled: true,
+    },
+    {
+      title: "Inbox sweeper",
+      desc: "Summarize open inbox items and mark recommended priority order.",
+      color: "#00d1ff",
+      intervalMs: 45 * 60 * 1000,
+      agentId: "random",
+      taskText: "Summarize the open inbox items, group by theme, and propose a priority order with next actions.",
+      enabled: true,
+    },
+    {
+      title: "Cafeteria creativity burst",
+      desc: "Generate 3 small product/UI improvements for MyClaw3D.",
+      color: "#9945ff",
+      intervalMs: 3 * 60 * 60 * 1000,
+      agentId: "random",
+      taskText: "Propose 3 small, high-leverage improvements to the MyClaw3D UX. For each: what, why, and a 3-step implementation plan.",
+      enabled: false,
+    },
+    {
+      title: "Weekly recap",
+      desc: "High-level recap of playbook runs and outcomes.",
+      color: "#c8a050",
+      intervalMs: 7 * 24 * 60 * 60 * 1000,
+      agentId: "random",
+      taskText: "Write a short weekly recap: what ran, what worked, what failed, and what to improve next week.",
+      enabled: false,
+    },
+  ]), []);
+
+  async function fetchPlaybooksIntoState() {
+    try {
+      const r = await fetch("/api/playbooks");
+      const json = await r.json().catch(() => null);
+      if (!r.ok || !json?.ok) return;
+      if (Array.isArray(json.playbooks)) setPlaybooks(json.playbooks);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function fetchAgentSettingsIntoState() {
+    try {
+      const r = await fetch("/api/agent-settings");
+      const json = await r.json().catch(() => null);
+      if (!r.ok || !json?.ok) return;
+      setAgentSettings(json.settings || {});
+    } catch {
+      // ignore
+    }
+  }
+
+  const installPlaybookTemplate = useCallback(async (tpl) => {
+    setMarketMsg("");
+    try {
+      const r = await fetch("/api/playbooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tpl),
+      });
+      const json = await r.json().catch(() => null);
+      if (!r.ok || !json?.ok) throw new Error(json?.error?.message || json?.error || `HTTP ${r.status}`);
+      setMarketMsg(`Installed: ${tpl.title}`);
+      fetchPlaybooksIntoState();
+    } catch (e) {
+      setMarketMsg(`Install failed: ${e?.message || String(e)}`);
+    }
+  }, []);
+
+  const downloadJson = useCallback((filename, value) => {
+    try {
+      const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const exportMarketBundle = useCallback(async () => {
+    setMarketMsg("");
+    try {
+      const [pbR, asR] = await Promise.all([fetch("/api/playbooks"), fetch("/api/agent-settings")]);
+      const pbJ = await pbR.json().catch(() => null);
+      const asJ = await asR.json().catch(() => null);
+      if (!pbR.ok || !pbJ?.ok) throw new Error(`playbooks: HTTP ${pbR.status}`);
+      if (!asR.ok || !asJ?.ok) throw new Error(`agent-settings: HTTP ${asR.status}`);
+      const bundle = {
+        version: 1,
+        exportedAt: Date.now(),
+        playbooks: Array.isArray(pbJ.playbooks) ? pbJ.playbooks : [],
+        agentSettings: asJ.settings || {},
+      };
+      downloadJson(`myclaw3d-marketplace-bundle-${new Date().toISOString().slice(0, 10)}.json`, bundle);
+      setMarketMsg("Exported JSON bundle.");
+    } catch (e) {
+      setMarketMsg(`Export failed: ${e?.message || String(e)}`);
+    }
+  }, [downloadJson]);
+
+  const importMarketBundle = useCallback(async () => {
+    setMarketMsg("");
+    let bundle;
+    try {
+      bundle = JSON.parse(marketImportText || "{}");
+    } catch (e) {
+      setMarketMsg(`Invalid JSON: ${e?.message || String(e)}`);
+      return;
+    }
+    try {
+      const nextAgentSettings = bundle?.agentSettings;
+      if (nextAgentSettings && typeof nextAgentSettings === "object" && !Array.isArray(nextAgentSettings)) {
+        const r = await fetch("/api/agent-settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(nextAgentSettings),
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j?.ok) throw new Error(j?.error?.message || `agent-settings: HTTP ${r.status}`);
+        fetchAgentSettingsIntoState();
+      }
+
+      const items = Array.isArray(bundle?.playbooks) ? bundle.playbooks : [];
+      let ok = 0;
+      let fail = 0;
+      for (const pb of items.slice(0, 200)) {
+        const payload = {
+          title: String(pb?.title || "PLAYBOOK"),
+          desc: String(pb?.desc || ""),
+          color: String(pb?.color || "#c8a050"),
+          intervalMs: Number(pb?.intervalMs || 60000),
+          agentId: String(pb?.agentId || "random"),
+          taskText: String(pb?.taskText || pb?.desc || pb?.title || "playbook run"),
+          enabled: Boolean(pb?.enabled ?? true),
+        };
+        try {
+          const r = await fetch("/api/playbooks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+          const j = await r.json().catch(() => null);
+          if (!r.ok || !j?.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+          ok++;
+        } catch {
+          fail++;
+        }
+      }
+      fetchPlaybooksIntoState();
+      setMarketMsg(`Imported. Playbooks: ${ok} ok, ${fail} failed${items.length > 200 ? " (capped at 200)" : ""}.`);
+    } catch (e) {
+      setMarketMsg(`Import failed: ${e?.message || String(e)}`);
+    }
+  }, [marketImportText]);
+
+  const curatedToolCards = useMemo(() => ([
+    {
+      title: "List sessions",
+      desc: "Sanity-check that the gateway is reachable.",
+      tool: "sessions_list",
+      action: "json",
+      args: {},
+    },
+    {
+      title: "List tools",
+      desc: "Discover available tools exposed by the gateway/agent.",
+      tool: "tools_list",
+      action: "json",
+      args: {},
+    },
+    {
+      title: "Ping (echo)",
+      desc: "Simple smoke test with a minimal payload.",
+      tool: "echo",
+      action: "json",
+      args: { message: "ping" },
+    },
+  ]), []);
+
+  const runToolCard = useCallback(async (card) => {
+    setMarketToolOutput("");
+    setMarketMsg("");
+    setMarketToolBusy(true);
+    try {
+      const agentId = toolAgent || "alpha";
+      const s = agentSettings?.[agentId] || {};
+      const openclawAgentId = (s.openclawAgentId || "").trim() || undefined;
+      const r = await fetch("/api/tools/invoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agentId,
+          openclawAgentId,
+          tool: String(card.tool || "").trim(),
+          action: String(card.action || "").trim() || undefined,
+          args: card.args && typeof card.args === "object" ? card.args : {},
+        }),
+      });
+      const json = await r.json().catch(() => null);
+      if (!r.ok) {
+        const msg = json?.error?.message || json?.error?.type || json?.error || json?.message || `HTTP ${r.status}`;
+        setMarketToolOutput(sanitizePreview(json || msg, 2000));
+        setMarketMsg(`Tool card failed: ${msg}`);
+        return;
+      }
+      setMarketToolOutput(sanitizePreview(json, 4000));
+      if (json?.ok) setMarketMsg("Tool card ran successfully.");
+      else setMarketMsg("Tool card returned a non-ok response.");
+    } catch (e) {
+      setMarketMsg(`Tool card error: ${e?.message || String(e)}`);
+      setMarketToolOutput(sanitizePreview(e?.message || String(e), 2000));
+    } finally {
+      setMarketToolBusy(false);
+    }
+  }, [toolAgent, agentSettings, sanitizePreview]);
+
+  const analyticsEvents = useMemo(() => {
+    let rows = Array.isArray(archivedEvents) ? archivedEvents : [];
+    if (analyticsAgent !== "all") rows = rows.filter(e => e.agentId === analyticsAgent);
+    if (analyticsType !== "all") rows = rows.filter(e => (e.type || "event") === analyticsType);
+    if (analyticsErrorsOnly) rows = rows.filter(e => e.ok === false);
+    return rows.slice(0, Math.max(10, Math.min(500, Number(analyticsLimit) || 300)));
+  }, [archivedEvents, analyticsAgent, analyticsType, analyticsErrorsOnly, analyticsLimit]);
+
+  const analyticsSummary = useMemo(() => {
+    const rows = analyticsEvents;
+    const total = rows.length;
+    const errors = rows.filter(e => e.ok === false).length;
+    const ok = total - errors;
+    const msVals = rows.map(e => e.ms).filter(n => Number.isFinite(Number(n))).map(Number);
+    const avg = msVals.length ? Math.round(msVals.reduce((a, b) => a + b, 0) / msVals.length) : null;
+    const p95 = pct(msVals, 95);
+    const byAgent = {};
+    const byType = {};
+    rows.forEach(e => {
+      const a = e.agentId || "unknown";
+      const t = e.type || "event";
+      byAgent[a] = (byAgent[a] || 0) + 1;
+      byType[t] = (byType[t] || 0) + 1;
+    });
+    const topAgents = Object.entries(byAgent).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const topTypes = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const recentErrors = rows.filter(e => e.ok === false).slice(0, 8);
+    return { total, ok, errors, avg, p95, topAgents, topTypes, recentErrors };
+  }, [analyticsEvents, pct]);
 
   const logObs = useCallback((evt) => {
     const e = {
@@ -299,7 +590,7 @@ export default function ClawHQ() {
       const r = await fetch("/api/events?limit=200");
       const json = await r.json().catch(() => null);
       if (!r.ok || !json?.ok) return;
-      if (Array.isArray(json.events)) setObsEvents(json.events);
+      if (Array.isArray(json.events)) setArchivedEvents(json.events);
     } catch {
       // ignore
     }
@@ -1325,41 +1616,7 @@ export default function ClawHQ() {
     const chestPressHandleR = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.45, 0.08), mat(0x888890));
     chestPressHandleR.position.set(gymX + 5.6, 1.02, gymZ + 1.6); scene.add(chestPressHandleR);
 
-    // Bench press
-    const bench = new THREE.Mesh(new THREE.BoxGeometry(2, 0.12, 0.55), mat(0x2a2a30));
-    bench.position.set(gymX + 1.2, 0.52, gymZ - 0.6); bench.castShadow = true; scene.add(bench);
-    const benchLegL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), mat(0x555555));
-    benchLegL.position.set(gymX + 0.45, 0.25, gymZ - 0.6); scene.add(benchLegL);
-    const benchLegR = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.12), mat(0x555555));
-    benchLegR.position.set(gymX + 1.95, 0.25, gymZ - 0.6); scene.add(benchLegR);
-    const barbell = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 10), mat(0xaaaaaa));
-    barbell.position.set(gymX + 1.2, 1.1, gymZ - 0.6); barbell.rotation.z = Math.PI / 2; scene.add(barbell);
-    [[-1.2, 0.18], [-1.2, -0.18], [1.2, 0.18], [1.2, -0.18]].forEach(([dx, dz]) => {
-      const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.06, 12), mat(0x444444));
-      plate.position.set(gymX + 1.2 + dx, 1.1, gymZ - 0.6 + dz); plate.rotation.z = Math.PI / 2; scene.add(plate);
-    });
-
-    // Power rack + extra barbells
-    const rackPosts = [
-      { x: gymX - 1.6, z: gymZ - 1.8 },
-      { x: gymX - 0.2, z: gymZ - 1.8 },
-      { x: gymX - 1.6, z: gymZ - 0.4 },
-      { x: gymX - 0.2, z: gymZ - 0.4 },
-    ];
-    rackPosts.forEach(({ x, z }) => {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.7, 0.08), mat(0x67676f));
-      post.position.set(x, 0.85, z); scene.add(post);
-    });
-    const rackTop = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.08, 1.45), mat(0x4d4d56));
-    rackTop.position.set(gymX - 0.9, 1.67, gymZ - 1.1); scene.add(rackTop);
-    const rackBarbell = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.5, 10), mat(0xb6b6b6));
-    rackBarbell.position.set(gymX - 0.9, 1.15, gymZ - 1.1); rackBarbell.rotation.z = Math.PI / 2; scene.add(rackBarbell);
-
-    // Trampoline
-    const trampoline = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.12, 24), mat(0x1b1b20));
-    trampoline.position.set(gymX + 2.2, 0.48, gymZ - 3.9); trampoline.castShadow = true; scene.add(trampoline);
-    const trampolineRing = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.05, 12, 28), mat(0xff6b6b));
-    trampolineRing.position.set(gymX + 2.2, 0.56, gymZ - 3.9); trampolineRing.rotation.x = Math.PI / 2; scene.add(trampolineRing);
+    // (Bench press, barbel rack, trampoline removed)
 
     // Ab wheel
     const abWheel = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.05, 10, 18), mat(0x333333));
@@ -1400,9 +1657,7 @@ export default function ClawHQ() {
       bikeWheel,
       chestPressHandleL,
       chestPressHandleR,
-      benchBarbell: barbell,
-      rackBarbell,
-      trampolineRing,
+      // (bench press / barbel rack / trampoline removed)
       abWheel,
       punchBag,
     };
@@ -1625,13 +1880,16 @@ export default function ClawHQ() {
     const allGameSpots = [...pingPongSpots, ...billiardSpots];
     const occupiedGameSpots = new Set();
 
+    // Cafeteria "sit" anchors are slightly in front of tables/counter.
+    // We apply a small backward offset at runtime so agents don't clip/stick into table AABBs.
     const cafeSpots = [
-      { x: bottomRoomX - 2.1, z: bottomRoomZ + 0.2, faceAngle: 0 },
-      { x: bottomRoomX - 3.0, z: bottomRoomZ + 1.3, faceAngle: Math.PI / 2 },
-      { x: bottomRoomX + 2.1, z: bottomRoomZ + 0.2, faceAngle: 0 },
-      { x: bottomRoomX + 3.0, z: bottomRoomZ + 1.3, faceAngle: -Math.PI / 2 },
-      { x: bottomRoomX, z: bottomRoomZ - 3.2, faceAngle: Math.PI },
-      { x: bottomRoomX - 0.7, z: bottomRoomZ + 5.05, faceAngle: 0 },
+      { x: bottomRoomX - 2.1, z: bottomRoomZ + 0.2, faceAngle: 0, back: 0.25 },
+      { x: bottomRoomX - 3.0, z: bottomRoomZ + 1.3, faceAngle: Math.PI / 2, back: 0.25 },
+      { x: bottomRoomX + 2.1, z: bottomRoomZ + 0.2, faceAngle: 0, back: 0.25 },
+      { x: bottomRoomX + 3.0, z: bottomRoomZ + 1.3, faceAngle: -Math.PI / 2, back: 0.25 },
+      { x: bottomRoomX, z: bottomRoomZ - 3.2, faceAngle: 0, back: 0.25 },
+      // Counter spot: a bit less offset so they don't drift into the register/counter lip.
+      { x: bottomRoomX - 0.7, z: bottomRoomZ + 5.05, faceAngle: 0, back: 0.45 },
     ];
     const occupiedCafeSpots = new Set();
 
@@ -1641,14 +1899,11 @@ export default function ClawHQ() {
       { x: gymX + 3.1, z: gymZ + 4.2, faceAngle: Math.PI, activity: "elliptical", back: 0.95 },
       { x: gymX + 5.5, z: gymZ + 4.3, faceAngle: Math.PI / 2, activity: "bike", back: 0.95 },
       { x: gymX + 5.2, z: gymZ + 1.3, faceAngle: Math.PI / 2, activity: "chestpress", back: 1.05 },
-      { x: gymX - 0.9, z: gymZ - 1.1, faceAngle: Math.PI, activity: "power_rack", back: 1.25 },
-      { x: gymX + 1.2, z: gymZ - 0.6, faceAngle: -Math.PI / 2, activity: "bench_press", back: 0.9, side: -0.35 },
       { x: gymX + 4.5, z: gymZ - 3.3, faceAngle: -Math.PI / 2, activity: "ab_wheel", back: 0.85 },
       { x: gymX - 4.7, z: gymZ - 3.8, faceAngle: Math.PI / 2, activity: "punching_bag", back: 0.95 },
       { x: gymX + 4.5, z: gymZ - 5.8, faceAngle: Math.PI, activity: "kettlebell", back: 0.95 },
       { x: gymX - 2.2, z: gymZ - 6.2, faceAngle: Math.PI, activity: "dumbbell", back: 1.35, side: 0.25 },
       { x: gymX - 3.3, z: gymZ - 5.4, faceAngle: Math.PI, activity: "barbell", back: 1.2, side: -0.25 },
-      { x: gymX + 2.2, z: gymZ - 3.9, faceAngle: 0, activity: "trampoline", back: 0.85, side: 0.15 },
     ];
     const occupiedGymSpots = new Set();
 
@@ -2069,9 +2324,6 @@ export default function ClawHQ() {
     obstacles.push({ minX: gymX + 2.4, maxX: gymX + 3.8, minZ: gymZ + 3.8, maxZ: gymZ + 4.6 }); // elliptical
     obstacles.push({ minX: gymX + 4.9, maxX: gymX + 6.3, minZ: gymZ + 3.8, maxZ: gymZ + 4.8 }); // stationary bike
     obstacles.push({ minX: gymX + 4.4, maxX: gymX + 6.0, minZ: gymZ + 0.8, maxZ: gymZ + 1.8 }); // chest press machine
-    obstacles.push({ minX: gymX - 1.8, maxX: gymX + 0.0, minZ: gymZ - 2.0, maxZ: gymZ - 0.2 }); // power rack
-    obstacles.push({ minX: gymX + 0.0, maxX: gymX + 2.4, minZ: gymZ - 1.0, maxZ: gymZ - 0.2 }); // bench press
-    obstacles.push({ minX: gymX + 1.0, maxX: gymX + 3.4, minZ: gymZ - 5.1, maxZ: gymZ - 2.7 }); // trampoline
     obstacles.push({ minX: gymX - 3.9, maxX: gymX - 0.5, minZ: gymZ - 6.5, maxZ: gymZ - 5.9 }); // dumbbell rack
     obstacles.push({ minX: gymX + 3.9, maxX: gymX + 5.1, minZ: gymZ - 6.0, maxZ: gymZ - 5.6 }); // kettlebells
     obstacles.push({ minX: gymX - 5.05, maxX: gymX - 4.35, minZ: gymZ - 4.2, maxZ: gymZ - 3.4 }); // punching bag
@@ -2524,8 +2776,14 @@ export default function ClawHQ() {
         if (target.cafeSitting) {
           const spot = cafeSpots[target.cafeSpotIdx];
           if (spot) {
-            mesh.position.x = spot.x;
-            mesh.position.z = spot.z;
+            const back = typeof spot.back === "number" ? spot.back : 0.85;
+            const sx = spot.x - Math.sin(spot.faceAngle) * back;
+            const sz = spot.z - Math.cos(spot.faceAngle) * back;
+            const side = typeof spot.side === "number" ? spot.side : 0;
+            const rx = Math.cos(spot.faceAngle);
+            const rz = -Math.sin(spot.faceAngle);
+            mesh.position.x = sx + rx * side;
+            mesh.position.z = sz + rz * side;
             mesh.position.y = 0.2;
             mesh.rotation.y = spot.faceAngle;
             target.cafePhase += dt * 4;
@@ -2561,8 +2819,16 @@ export default function ClawHQ() {
         if (target.goToCafe) {
           const spot = cafeSpots[target.cafeSpotIdx];
           if (spot) {
-            const dx = spot.x - mesh.position.x;
-            const dz = spot.z - mesh.position.z;
+            const back = typeof spot.back === "number" ? spot.back : 0.85;
+            const sx = spot.x - Math.sin(spot.faceAngle) * back;
+            const sz = spot.z - Math.cos(spot.faceAngle) * back;
+            const side = typeof spot.side === "number" ? spot.side : 0;
+            const rx = Math.cos(spot.faceAngle);
+            const rz = -Math.sin(spot.faceAngle);
+            const tx = sx + rx * side;
+            const tz = sz + rz * side;
+            const dx = tx - mesh.position.x;
+            const dz = tz - mesh.position.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
             if (dist < 0.3) {
               target.cafeSitting = true;
@@ -2625,18 +2891,6 @@ export default function ClawHQ() {
               if (ud.legRPivot) ud.legRPivot.rotation.x = -0.55;
               if (ud.armLPivot) ud.armLPivot.rotation.x = -0.35 + Math.max(0, pulse) * 0.85;
               if (ud.armRPivot) ud.armRPivot.rotation.x = -0.35 + Math.max(0, pulse) * 0.85;
-            } else if (spot.activity === "power_rack") {
-              mesh.position.y = Math.abs(pulse) * 0.12;
-              if (ud.legLPivot) ud.legLPivot.rotation.x = -0.35 - Math.abs(pulse) * 0.6;
-              if (ud.legRPivot) ud.legRPivot.rotation.x = -0.35 - Math.abs(pulse) * 0.6;
-              if (ud.armLPivot) ud.armLPivot.rotation.x = -0.95;
-              if (ud.armRPivot) ud.armRPivot.rotation.x = -0.95;
-            } else if (spot.activity === "bench_press") {
-              mesh.position.y = 0.08;
-              if (ud.legLPivot) ud.legLPivot.rotation.x = -0.75;
-              if (ud.legRPivot) ud.legRPivot.rotation.x = -0.75;
-              if (ud.armLPivot) ud.armLPivot.rotation.x = -1.1 + Math.max(0, pulse) * 0.9;
-              if (ud.armRPivot) ud.armRPivot.rotation.x = -1.1 + Math.max(0, pulse) * 0.9;
             } else if (spot.activity === "ab_wheel") {
               mesh.position.y = 0.03;
               if (ud.legLPivot) ud.legLPivot.rotation.x = -0.25;
@@ -2648,12 +2902,6 @@ export default function ClawHQ() {
               if (ud.legRPivot) ud.legRPivot.rotation.x = -0.12;
               if (ud.armLPivot) { ud.armLPivot.rotation.x = -0.45; ud.armLPivot.rotation.z = -0.1; }
               if (ud.armRPivot) { ud.armRPivot.rotation.x = -0.35 + Math.max(0, pulse) * 1.0; ud.armRPivot.rotation.z = 0.25; }
-            } else if (spot.activity === "trampoline") {
-              mesh.position.y = Math.abs(pulse) * 0.35;
-              if (ud.legLPivot) ud.legLPivot.rotation.x = -0.1 + pulse * 0.2;
-              if (ud.legRPivot) ud.legRPivot.rotation.x = -0.1 - pulse * 0.2;
-              if (ud.armLPivot) ud.armLPivot.rotation.x = -0.7 + Math.abs(pulse) * 0.35;
-              if (ud.armRPivot) ud.armRPivot.rotation.x = -0.7 + Math.abs(pulse) * 0.35;
             } else if (spot.activity === "kettlebell") {
               if (ud.legLPivot) ud.legLPivot.rotation.x = -0.25;
               if (ud.legRPivot) ud.legRPivot.rotation.x = -0.25;
@@ -3214,26 +3462,7 @@ export default function ClawHQ() {
         gp.chestPressHandleL.position.x = gp.chestPressHandleL.userData.baseX - pump;
         gp.chestPressHandleR.position.x = gp.chestPressHandleR.userData.baseX - pump;
       }
-      // bench press barbell bounce
-      if (gp.benchBarbell) {
-        const on = activeGymActivities.has("bench_press");
-        gp.benchBarbell.position.y = (gp.benchBarbell.userData.baseY ?? gp.benchBarbell.position.y);
-        if (gp.benchBarbell.userData.baseY == null) gp.benchBarbell.userData.baseY = gp.benchBarbell.position.y;
-        gp.benchBarbell.position.y = gp.benchBarbell.userData.baseY + (on ? Math.max(0, Math.sin(elapsed * 5)) * 0.12 : 0);
-      }
-      // power rack barbell wobble
-      if (gp.rackBarbell) {
-        const on = activeGymActivities.has("power_rack");
-        gp.rackBarbell.rotation.x = on ? Math.sin(elapsed * 7) * 0.08 : 0;
-      }
-      // spareBarbell removed (was clutter / looked like floating bar)
-      // trampoline ring bounce
-      if (gp.trampolineRing) {
-        const on = activeGymActivities.has("trampoline");
-        gp.trampolineRing.position.y = (gp.trampolineRing.userData.baseY ?? gp.trampolineRing.position.y);
-        if (gp.trampolineRing.userData.baseY == null) gp.trampolineRing.userData.baseY = gp.trampolineRing.position.y;
-        gp.trampolineRing.position.y = gp.trampolineRing.userData.baseY + (on ? Math.abs(Math.sin(elapsed * 6)) * 0.12 : 0);
-      }
+      // (bench press / barbel rack / trampoline removed)
       // ab wheel spin
       if (gp.abWheel) {
         const on = activeGymActivities.has("ab_wheel");
@@ -3650,6 +3879,14 @@ export default function ClawHQ() {
   const chatMsgEndRef = useRef(null);
   useEffect(() => { chatMsgEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatHistories, chatAgent]);
 
+  useEffect(() => {
+    if (!settingsOpen || !settingsFocusAgent) return;
+    const el = settingsAgentRowRef.current?.[settingsFocusAgent];
+    if (!el) return;
+    const t = setTimeout(() => el.scrollIntoView({ block: "center", behavior: "smooth" }), 50);
+    return () => clearTimeout(t);
+  }, [settingsOpen, settingsFocusAgent]);
+
   const sendAgentChat = useCallback(async () => {
     if (!chatInput.trim()) return;
     const msg = chatInput;
@@ -3697,14 +3934,11 @@ export default function ClawHQ() {
       { keys: ["elliptical"], idx: [2] },
       { keys: ["bike", "cycle"], idx: [3] },
       { keys: ["chest press", "chestpress"], idx: [4] },
-      { keys: ["power rack", "squat rack", "squat"], idx: [5] },
-      { keys: ["bench", "bench press", "benchpress"], idx: [6] },
-      { keys: ["ab wheel", "abs"], idx: [7] },
-      { keys: ["punch", "punching bag", "boxing"], idx: [8] },
-      { keys: ["kettlebell", "kettle bell"], idx: [9] },
-      { keys: ["dumbbell", "dumbbells"], idx: [10] },
-      { keys: ["barbell", "barbells"], idx: [11] },
-      { keys: ["trampoline", "jump"], idx: [12] },
+      { keys: ["ab wheel", "abs"], idx: [5] },
+      { keys: ["punch", "punching bag", "boxing"], idx: [6] },
+      { keys: ["kettlebell", "kettle bell"], idx: [7] },
+      { keys: ["dumbbell", "dumbbells"], idx: [8] },
+      { keys: ["barbell", "barbells"], idx: [9] },
     ];
     const pingpongKeywords = ["ping pong", "pingpong", "table tennis", "play ping"];
     const billiardKeywords = ["billiard", "pool", "play pool", "shoot pool", "play billiard"];
@@ -3725,7 +3959,7 @@ export default function ClawHQ() {
       for (const row of gymEquipmentMap) {
         if (row.keys.some(k => text.includes(k))) return pickRandom(row.idx);
       }
-      return Math.floor(Math.random() * 13);
+      return Math.floor(Math.random() * gymSpots.length);
     }
 
     if (isSitCommand) {
@@ -3881,6 +4115,8 @@ export default function ClawHQ() {
       commandAgentToDesk(chatAgent);
       bumpAgentActivity(chatAgent, { thinking: 1 });
       const route = getAgentRoute(chatAgent);
+      const chatModelOverride = (chatModelByAgent?.[chatAgent] || "").trim();
+      const modelToUse = chatModelOverride || route.model;
 
       const history = (chatHistoriesRef.current?.[chatAgent] || [])
         .slice(-12)
@@ -3907,7 +4143,7 @@ export default function ClawHQ() {
             agentRole: agent?.role,
             intent: "chat",
             openclawAgentId: route.openclawAgentId,
-            model: route.model,
+            model: modelToUse,
             message: formatBuffLine(chatAgent) ? `${formatBuffLine(chatAgent)}\n\n${msg}` : msg,
             history
           }),
@@ -3930,7 +4166,7 @@ export default function ClawHQ() {
             ms: Math.round(performance.now() - t0),
             inTok: approxTokens(msg),
             outTok: approxTokens(t || errText),
-            req: sanitizePreview({ intent: "chat", message: msg }, 700),
+            req: sanitizePreview({ intent: "chat", message: msg, model: modelToUse }, 700),
             res: sanitizePreview(t || errText, 900),
           });
           bumpAgentActivity(chatAgent, { error: true });
@@ -4213,9 +4449,10 @@ export default function ClawHQ() {
           border: "1px solid #2a2520", borderRight: "none",
           borderRadius: "10px 0 0 10px",
           transform: hqPanelOpen ? "translateX(-380px)" : "translateX(0)",
-          opacity: chatPanelOpen ? 0 : 1, pointerEvents: chatPanelOpen ? "none" : "auto",
+          opacity: (anyPanelOverlayOpen && !hqPanelOpen) ? 0 : 1,
+          pointerEvents: (anyPanelOverlayOpen && !hqPanelOpen) ? "none" : "auto",
         }}>OPEN DASHBOARD</div>
-        <div style={{
+        <div onClick={() => { setMarketplaceOpen(p => !p); setAnalyticsOpen(false); setHqPanelOpen(false); setChatPanelOpen(false); setMarketMsg(""); }} style={{
           writingMode: "vertical-rl", textOrientation: "mixed",
           padding: "18px 10px", fontSize: 9, letterSpacing: 3, fontWeight: 600,
           cursor: "pointer", transition: "all 0.3s ease", textAlign: "center",
@@ -4223,9 +4460,11 @@ export default function ClawHQ() {
           background: "rgba(10,10,15,0.88)", backdropFilter: "blur(16px)",
           border: "1px solid #2a2520", borderRight: "none",
           borderRadius: "10px 0 0 10px",
-          opacity: (hqPanelOpen || chatPanelOpen) ? 0 : 1, pointerEvents: (hqPanelOpen || chatPanelOpen) ? "none" : "auto",
+          transform: marketplaceOpen ? "translateX(-420px)" : "translateX(0)",
+          opacity: (anyPanelOverlayOpen && !marketplaceOpen) ? 0 : 1,
+          pointerEvents: (anyPanelOverlayOpen && !marketplaceOpen) ? "none" : "auto",
         }}>MARKETPLACE</div>
-        <div style={{
+        <div onClick={() => { setAnalyticsOpen(p => !p); setMarketplaceOpen(false); setHqPanelOpen(false); setChatPanelOpen(false); }} style={{
           writingMode: "vertical-rl", textOrientation: "mixed",
           padding: "18px 10px", fontSize: 9, letterSpacing: 3, fontWeight: 600,
           cursor: "pointer", transition: "all 0.3s ease", textAlign: "center",
@@ -4233,8 +4472,267 @@ export default function ClawHQ() {
           background: "rgba(10,10,15,0.88)", backdropFilter: "blur(16px)",
           border: "1px solid #2a2520", borderRight: "none",
           borderRadius: "10px 0 0 10px",
-          opacity: (hqPanelOpen || chatPanelOpen) ? 0 : 1, pointerEvents: (hqPanelOpen || chatPanelOpen) ? "none" : "auto",
+          transform: analyticsOpen ? "translateX(-420px)" : "translateX(0)",
+          opacity: (anyPanelOverlayOpen && !analyticsOpen) ? 0 : 1,
+          pointerEvents: (anyPanelOverlayOpen && !analyticsOpen) ? "none" : "auto",
         }}>ANALYTICS</div>
+      </div>
+
+      {/* MARKETPLACE PANEL */}
+      <div style={{
+        position: "fixed", top: 80, right: marketplaceOpen ? 0 : -420, bottom: 40, width: 420, zIndex: 105,
+        background: "rgba(10,10,15,0.95)", backdropFilter: "blur(20px)",
+        border: "1px solid #2a2520", borderRight: "none",
+        borderRadius: "16px 0 0 16px",
+        display: "flex", flexDirection: "column", transition: "right 0.3s ease",
+        fontFamily: "'Courier New', monospace", overflow: "hidden"
+      }}>
+        <div style={{ padding: "16px 20px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#9945ff", letterSpacing: 2, marginBottom: 4 }}>MARKETPLACE</div>
+            <div style={{ fontSize: 10, color: "#6a6055" }}>Install and share playbooks + agent settings.</div>
+          </div>
+          <div onClick={() => setMarketplaceOpen(false)} style={{
+            width: 26, height: 26, borderRadius: 8, border: "1px solid #2a2520",
+            display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+            color: "#6a6055"
+          }}>×</div>
+        </div>
+
+        <div style={{ display: "flex", borderBottom: "1px solid #2a2520", padding: "0 20px" }}>
+          {[
+            { k: "browse", label: "Browse" },
+            { k: "importexport", label: "Import/Export" },
+          ].map(t => (
+            <div key={t.k} onClick={() => setMarketTab(t.k)} style={{
+              padding: "10px 14px", fontSize: 10, letterSpacing: 1.5, fontWeight: 700,
+              textTransform: "uppercase", cursor: "pointer", transition: "all 0.2s",
+              color: marketTab === t.k ? "#e0e0e8" : "#6a6055",
+              background: marketTab === t.k ? "rgba(153,69,255,0.12)" : "transparent",
+              borderRadius: marketTab === t.k ? "6px 6px 0 0" : 0,
+              borderBottom: marketTab === t.k ? "2px solid #9945ff" : "2px solid transparent",
+            }}>{t.label}</div>
+          ))}
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
+          {marketMsg ? (
+            <div style={{ marginBottom: 10, fontSize: 10, color: marketMsg.startsWith("Install failed") || marketMsg.startsWith("Import failed") || marketMsg.startsWith("Export failed") || marketMsg.startsWith("Invalid JSON") ? "#ffaa22" : "#14f195" }}>
+              {marketMsg}
+            </div>
+          ) : null}
+
+          {marketTab === "browse" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {curatedPlaybooks.map((pb, idx) => (
+                <div key={idx} style={{
+                  padding: "12px 14px", background: "rgba(30,28,24,0.6)", border: "1px solid #2a2520",
+                  borderRadius: 10, borderLeft: `3px solid ${pb.color || "#9945ff"}`
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 800, color: "#e0e0e8" }}>{pb.title}</div>
+                    <button onClick={() => installPlaybookTemplate(pb)} style={{
+                      padding: "7px 10px", fontSize: 10, fontWeight: 800, letterSpacing: 1,
+                      background: "rgba(153,69,255,0.15)", border: "1px solid rgba(153,69,255,0.35)",
+                      color: "#cdb6ff", borderRadius: 8, cursor: "pointer",
+                    }}>INSTALL</button>
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 10, color: "#6a6055", lineHeight: 1.4 }}>{pb.desc}</div>
+                  <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap", fontSize: 9, color: "#4a4540" }}>
+                    <span>interval: {Math.round((pb.intervalMs || 60000) / 60000)}m</span>
+                    <span>agent: {pb.agentId || "random"}</span>
+                    <span>{pb.enabled ? "enabled" : "disabled"}</span>
+                  </div>
+                </div>
+              ))}
+              <div style={{ fontSize: 9, color: "#4a4540", lineHeight: 1.5 }}>
+                Tip: after installing, manage schedules in <b>OPEN DASHBOARD → playbooks</b>.
+              </div>
+            </div>
+          )}
+
+          {marketTab === "importexport" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button onClick={exportMarketBundle} style={{
+                  padding: "9px 12px", fontSize: 10, fontWeight: 900, letterSpacing: 1,
+                  background: "rgba(20,241,149,0.12)", border: "1px solid rgba(20,241,149,0.25)",
+                  color: "#aaf3d1", borderRadius: 10, cursor: "pointer",
+                }}>EXPORT JSON</button>
+                <button onClick={importMarketBundle} style={{
+                  padding: "9px 12px", fontSize: 10, fontWeight: 900, letterSpacing: 1,
+                  background: "rgba(255,170,34,0.12)", border: "1px solid rgba(255,170,34,0.25)",
+                  color: "#ffd39a", borderRadius: 10, cursor: "pointer",
+                }}>IMPORT JSON</button>
+                <button onClick={() => { setMarketImportText(""); setMarketMsg(""); }} style={{
+                  padding: "9px 12px", fontSize: 10, fontWeight: 800, letterSpacing: 1,
+                  background: "transparent", border: "1px solid #2a2520",
+                  color: "#6a6055", borderRadius: 10, cursor: "pointer",
+                }}>CLEAR</button>
+              </div>
+              <div style={{ fontSize: 10, color: "#6a6055", lineHeight: 1.5 }}>
+                Paste a bundle JSON containing <b>playbooks</b> (array) and/or <b>agentSettings</b> (object map).
+              </div>
+              <textarea value={marketImportText} onChange={(e) => setMarketImportText(e.target.value)} placeholder="{ ... }" style={{
+                width: "100%", height: 280, resize: "vertical",
+                background: "rgba(20,18,16,0.6)", border: "1px solid #2a2520",
+                borderRadius: 10, padding: 12, color: "#e0e0e8",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+                fontSize: 10, outline: "none",
+              }} />
+            </div>
+          )}
+
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #2a2520" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 900, letterSpacing: 2, color: "#6a6055" }}>TOOL CARDS</div>
+              <div style={{ fontSize: 9, color: serverHealth?.hasToken ? "#14f195" : "#ffaa22" }}>
+                {serverHealth?.hasToken ? "TOKEN OK" : "NO TOKEN"}
+              </div>
+            </div>
+            <div style={{ fontSize: 10, color: "#6a6055", lineHeight: 1.5, marginBottom: 10 }}>
+              These call <b>/api/tools/invoke</b>. Pick an agent from the Tools panel if you want; defaults to <b>{toolAgent}</b>.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {curatedToolCards.map((c, idx) => (
+                <div key={idx} style={{ padding: "12px 14px", background: "rgba(20,18,16,0.5)", border: "1px solid #2a2520", borderRadius: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                    <div style={{ fontSize: 11, fontWeight: 900, color: "#e0e0e8" }}>{c.title}</div>
+                    <button disabled={marketToolBusy} onClick={() => runToolCard(c)} style={{
+                      padding: "7px 10px", fontSize: 10, fontWeight: 900, letterSpacing: 1,
+                      background: marketToolBusy ? "rgba(0,209,255,0.08)" : "rgba(0,209,255,0.12)",
+                      border: "1px solid rgba(0,209,255,0.25)",
+                      color: "#a7f0ff", borderRadius: 8, cursor: marketToolBusy ? "not-allowed" : "pointer",
+                    }}>{marketToolBusy ? "RUNNING…" : "RUN"}</button>
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 10, color: "#6a6055" }}>{c.desc}</div>
+                  <div style={{ marginTop: 8, fontSize: 9, color: "#4a4540" }}>
+                    tool: <b style={{ color: "#e0e0e8" }}>{c.tool}</b>{c.action ? ` · action: ${c.action}` : ""}
+                  </div>
+                </div>
+              ))}
+              {marketToolOutput ? (
+                <pre style={{
+                  marginTop: 2,
+                  whiteSpace: "pre-wrap",
+                  background: "rgba(10,10,15,0.7)",
+                  border: "1px solid #2a2520",
+                  borderRadius: 10,
+                  padding: 12,
+                  color: "#e0e0e8",
+                  fontSize: 10,
+                  overflowX: "auto",
+                }}>{marketToolOutput}</pre>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ANALYTICS PANEL */}
+      <div style={{
+        position: "fixed", top: 80, right: analyticsOpen ? 0 : -420, bottom: 40, width: 420, zIndex: 105,
+        background: "rgba(10,10,15,0.95)", backdropFilter: "blur(20px)",
+        border: "1px solid #2a2520", borderRight: "none",
+        borderRadius: "16px 0 0 16px",
+        display: "flex", flexDirection: "column", transition: "right 0.3s ease",
+        fontFamily: "'Courier New', monospace", overflow: "hidden"
+      }}>
+        <div style={{ padding: "16px 20px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#00d1ff", letterSpacing: 2, marginBottom: 4 }}>ANALYTICS</div>
+            <div style={{ fontSize: 10, color: "#6a6055" }}>Summaries from local `/api/events`.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button onClick={refreshEvents} style={{
+              padding: "7px 10px", fontSize: 10, fontWeight: 900, letterSpacing: 1,
+              background: "rgba(0,209,255,0.12)", border: "1px solid rgba(0,209,255,0.25)",
+              color: "#a7f0ff", borderRadius: 10, cursor: "pointer",
+            }}>REFRESH</button>
+            <div onClick={() => setAnalyticsOpen(false)} style={{
+              width: 26, height: 26, borderRadius: 8, border: "1px solid #2a2520",
+              display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+              color: "#6a6055"
+            }}>×</div>
+          </div>
+        </div>
+
+        <div style={{ padding: "0 20px 12px", borderBottom: "1px solid #2a2520", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <select value={analyticsAgent} onChange={(e) => setAnalyticsAgent(e.target.value)} style={{ background: "rgba(20,18,16,0.6)", border: "1px solid #2a2520", color: "#e0e0e8", borderRadius: 8, padding: "6px 8px", fontSize: 10 }}>
+            <option value="all">all agents</option>
+            {AGENTS.map(a => <option key={a.id} value={a.id}>{a.id}</option>)}
+          </select>
+          <select value={analyticsType} onChange={(e) => setAnalyticsType(e.target.value)} style={{ background: "rgba(20,18,16,0.6)", border: "1px solid #2a2520", color: "#e0e0e8", borderRadius: 8, padding: "6px 8px", fontSize: 10 }}>
+            <option value="all">all types</option>
+            {Array.from(new Set((archivedEvents || []).map(e => e.type || "event"))).slice(0, 25).map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "#6a6055" }}>
+            <input type="checkbox" checked={analyticsErrorsOnly} onChange={(e) => setAnalyticsErrorsOnly(e.target.checked)} />
+            errors only
+          </label>
+          <select value={analyticsLimit} onChange={(e) => setAnalyticsLimit(Number(e.target.value))} style={{ background: "rgba(20,18,16,0.6)", border: "1px solid #2a2520", color: "#e0e0e8", borderRadius: 8, padding: "6px 8px", fontSize: 10 }}>
+            {[120, 200, 300, 400, 500].map(n => <option key={n} value={n}>last {n}</option>)}
+          </select>
+        </div>
+
+        <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {[
+              { k: "total", label: "calls", v: analyticsSummary.total, c: "#00d1ff" },
+              { k: "ok", label: "ok", v: analyticsSummary.ok, c: "#14f195" },
+              { k: "err", label: "errors", v: analyticsSummary.errors, c: "#ff4d4d" },
+              { k: "avg", label: "avg ms", v: analyticsSummary.avg ?? "—", c: "#c8a050" },
+            ].map(card => (
+              <div key={card.k} style={{ padding: "10px 12px", background: "rgba(30,28,24,0.6)", border: "1px solid #2a2520", borderRadius: 10 }}>
+                <div style={{ fontSize: 9, color: "#6a6055", letterSpacing: 2, fontWeight: 800 }}>{card.label.toUpperCase()}</div>
+                <div style={{ marginTop: 6, fontSize: 18, fontWeight: 900, color: card.c }}>{card.v}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", fontSize: 10, color: "#6a6055" }}>
+            <span>p95: <b style={{ color: "#e0e0e8" }}>{analyticsSummary.p95 ?? "—"}ms</b></span>
+            <span>success: <b style={{ color: "#e0e0e8" }}>{analyticsSummary.total ? `${Math.round((analyticsSummary.ok / analyticsSummary.total) * 100)}%` : "—"}</b></span>
+          </div>
+
+          <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ padding: "10px 12px", background: "rgba(20,18,16,0.5)", border: "1px solid #2a2520", borderRadius: 10 }}>
+              <div style={{ fontSize: 9, color: "#6a6055", letterSpacing: 2, fontWeight: 800, marginBottom: 8 }}>TOP AGENTS</div>
+              {analyticsSummary.topAgents.length ? analyticsSummary.topAgents.map(([k, v]) => (
+                <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#e0e0e8", marginBottom: 6 }}>
+                  <span style={{ color: "#cdb6ff" }}>{k}</span>
+                  <span style={{ color: "#6a6055" }}>{v}</span>
+                </div>
+              )) : <div style={{ fontSize: 10, color: "#4a4540" }}>—</div>}
+            </div>
+            <div style={{ padding: "10px 12px", background: "rgba(20,18,16,0.5)", border: "1px solid #2a2520", borderRadius: 10 }}>
+              <div style={{ fontSize: 9, color: "#6a6055", letterSpacing: 2, fontWeight: 800, marginBottom: 8 }}>TOP TYPES</div>
+              {analyticsSummary.topTypes.length ? analyticsSummary.topTypes.map(([k, v]) => (
+                <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#e0e0e8", marginBottom: 6 }}>
+                  <span style={{ color: "#a7f0ff" }}>{k}</span>
+                  <span style={{ color: "#6a6055" }}>{v}</span>
+                </div>
+              )) : <div style={{ fontSize: 10, color: "#4a4540" }}>—</div>}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, padding: "10px 12px", background: "rgba(30,28,24,0.6)", border: "1px solid #2a2520", borderRadius: 10 }}>
+            <div style={{ fontSize: 9, color: "#6a6055", letterSpacing: 2, fontWeight: 800, marginBottom: 8 }}>RECENT ERRORS</div>
+            {analyticsSummary.recentErrors.length ? analyticsSummary.recentErrors.map(e => (
+              <div key={e.id} style={{ padding: "8px 10px", border: "1px solid rgba(255,77,77,0.22)", background: "rgba(255,77,77,0.06)", borderRadius: 8, marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <span style={{ fontSize: 10, fontWeight: 900, color: "#ff8a8a" }}>{(e.type || "event").toUpperCase()}</span>
+                  <span style={{ fontSize: 9, color: "#6a6055" }}>{new Date(Number(e.ts || Date.now())).toLocaleTimeString()}</span>
+                </div>
+                <div style={{ marginTop: 6, fontSize: 10, color: "#e0e0e8", whiteSpace: "pre-wrap" }}>
+                  {sanitizePreview(e.error || e.res || e.label || "error", 200)}
+                </div>
+              </div>
+            )) : <div style={{ fontSize: 10, color: "#4a4540" }}>No errors in current filter.</div>}
+          </div>
+        </div>
       </div>
 
       {/* OPEN DASHBOARD PANEL */}
@@ -4277,12 +4775,12 @@ export default function ClawHQ() {
 
           {hqTab === "history" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {obsEvents.length === 0 && (
+              {archivedEvents.length === 0 && (
                 <div style={{ fontSize: 10, color: "#6a6055", textAlign: "center", padding: "40px 0" }}>
                   No history yet. Run a task, chat, or invoke a tool.
                 </div>
               )}
-              {obsEvents.slice(0, 60).map(e => (
+              {archivedEvents.slice(0, 60).map(e => (
                 <div key={e.id} style={{
                   padding: "10px 14px", background: "rgba(30,28,24,0.6)", border: "1px solid #2a2520",
                   borderRadius: 8, borderLeft: `3px solid ${e.ok ? "#14f195" : "#ffaa22"}`
@@ -4734,7 +5232,11 @@ export default function ClawHQ() {
                   background: "#c8a050", color: "#0a0a0f", border: "none", cursor: "pointer",
                   fontFamily: "inherit", letterSpacing: 0.5
                 }}>New session</button>
-                <div style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, border: "1px solid #2a2520", cursor: "pointer" }}>
+                <div
+                  onClick={() => { setSettingsFocusAgent(chatAgent); setSettingsOpen(true); }}
+                  title="Agent settings"
+                  style={{ width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, border: "1px solid #2a2520", cursor: "pointer" }}
+                >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6a6055" strokeWidth="1.8">
                     <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                   </svg>
@@ -4789,19 +5291,79 @@ export default function ClawHQ() {
           </div>
           {/* Model selector row */}
           <div style={{ padding: "4px 16px 10px", display: "flex", alignItems: "center", gap: 8 }}>
-            <select style={{
+            <select value={chatModelByAgent?.[chatAgent] || ""} onChange={(e) => {
+              const v = e.target.value;
+              setChatModelByAgent(prev => ({ ...(prev || {}), [chatAgent]: v }));
+            }} style={{
               background: "rgba(30,28,24,0.8)", border: "1px solid #2a2520", borderRadius: 6,
               padding: "5px 10px", color: "#c8a050", fontFamily: "inherit", fontSize: 10, outline: "none", cursor: "pointer"
             }}>
-              <option>GPT-4.1 mini</option>
-              <option>GPT-4o</option>
-              <option>Claude Sonnet</option>
-              <option>Llama 3</option>
-              <option>DeepSeek</option>
+              <option value="">Auto (agent settings)</option>
+              <option value="gpt-4.1-mini">GPT-4.1 mini</option>
+              <option value="gpt-4o">GPT-4o</option>
+              <option value="claude-sonnet">Claude Sonnet</option>
+              <option value="llama-3">Llama 3</option>
+              <option value="deepseek">DeepSeek</option>
             </select>
-            <span style={{ fontSize: 9, color: "#4a4540", cursor: "pointer" }}>Show</span>
-            <span style={{ fontSize: 9, color: "#4a4540", cursor: "pointer" }}>Tools</span>
+            <span
+              onClick={() => setChatShowToolsByAgent(prev => ({ ...(prev || {}), [chatAgent]: !prev?.[chatAgent] }))}
+              style={{
+                fontSize: 9,
+                color: (chatShowToolsByAgent?.[chatAgent] ? "#c8a050" : "#4a4540"),
+                cursor: "pointer",
+                userSelect: "none"
+              }}
+              title="Toggle tool/terminal output"
+            >
+              Show
+            </span>
+            <span
+              onClick={() => { setToolAgent(chatAgent); setToolsOpen(true); }}
+              style={{ fontSize: 9, color: "#4a4540", cursor: "pointer", userSelect: "none" }}
+              title="Open Tools console"
+            >
+              Tools
+            </span>
           </div>
+
+          {(chatShowToolsByAgent?.[chatAgent]) && (
+            <div style={{
+              padding: "10px 16px 12px",
+              borderTop: "1px solid #2a2520",
+              background: "rgba(10,10,15,0.6)"
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#6a6055", letterSpacing: 2 }}>TERMINAL</div>
+                <div style={{ flex: 1 }} />
+                <div onClick={() => { terminalLogsRef.current[chatAgent] = []; setTerminalTick(t => t + 1); }} style={{
+                  fontSize: 9, color: "#4a4540", cursor: "pointer", border: "1px solid #2a2520",
+                  padding: "4px 8px", borderRadius: 999, userSelect: "none"
+                }}>CLEAR</div>
+              </div>
+              <div style={{
+                maxHeight: 140,
+                overflowY: "auto",
+                borderRadius: 10,
+                border: "1px solid #2a2520",
+                background: "rgba(0,0,0,0.25)",
+                padding: 10,
+                fontFamily: "'Courier New', monospace",
+                fontSize: 10,
+                color: "#cfc9c2",
+                whiteSpace: "pre-wrap",
+                lineHeight: 1.4
+              }}>
+                {(terminalLogsRef.current?.[chatAgent] || []).slice(-80).map((l, i) => (
+                  <div key={i} style={{ color: l.type === "warning" ? "#ffaa22" : l.type === "info" ? "#00d1ff" : "#cfc9c2" }}>
+                    <span style={{ color: "#4a4540" }}>{l.ts} </span>{l.text}
+                  </div>
+                ))}
+                {(terminalLogsRef.current?.[chatAgent] || []).length === 0 && (
+                  <div style={{ color: "#4a4540" }}>No terminal output yet.</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -5435,7 +5997,11 @@ export default function ClawHQ() {
                     const connected = Boolean(serverHealth?.hasToken);
                     const t = agentTest?.[a.id] || {};
                     return (
-                      <div key={a.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr 90px 120px", gap: 8, alignItems: "center" }}>
+                      <div
+                        key={a.id}
+                        ref={(el) => { if (el) settingsAgentRowRef.current[a.id] = el; }}
+                        style={{ display: "grid", gridTemplateColumns: "140px 1fr 1fr 90px 120px", gap: 8, alignItems: "center" }}
+                      >
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <div style={{ width: 10, height: 10, borderRadius: 999, background: hexToCSS(a.color) }} />
                           <div style={{ fontSize: 11, fontWeight: 900, color: "#e0e0e8", fontFamily: "'Courier New', monospace" }}>{a.name}</div>
